@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+
+{% block title %}403 — access denied{% endblock %}
+
+{% block content %}
+  <h1>403 — access denied</h1>
+  <p>Your account has no permission for this section.</p>
+  <p><a href="{% url 'home' %}">Back to home</a></p>
+{% endblock %}

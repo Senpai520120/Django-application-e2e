@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+
+{% block title %}Role audit — panel{% endblock %}
+
+{% block content %}
+  <h1>Audit: role changes</h1>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>When</th><th>Who</th><th>Action</th><th>Role</th><th>To whom</th></tr>
+      </thead>
+      <tbody>
+        {% for change in changes %}
+          <tr>
+            <td>{{ change.created_at|date:"d.m.Y H:i" }}</td>
+            <td>{{ change.actor.username|default:"system" }}</td>
+            <td>{{ change.get_action_display }}</td>
+            <td><span class="badge">{{ change.group_name }}</span></td>
+            <td>{{ change.target_username }}</td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="5"><em>No changes yet.</em></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if is_paginated %}
+    <nav class="pagination">
+      {% if page_obj.has_previous %}<a href="?page={{ page_obj.previous_page_number }}">← Back</a>{% endif %}
+      <span>Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span>
+      {% if page_obj.has_next %}<a href="?page={{ page_obj.next_page_number }}">Next →</a>{% endif %}
+    </nav>
+  {% endif %}
+{% endblock %}

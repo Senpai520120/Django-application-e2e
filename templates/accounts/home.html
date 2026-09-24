@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+
+{% block title %}Home — Users &amp; Roles{% endblock %}
+
+{% block content %}
+  <h1>You are signed in as {{ user.get_username }}</h1>
+
+  <p class="card">
+    Your roles:
+    {% for role in roles %}
+      <span class="badge">{{ role.name }}</span>
+    {% empty %}
+      <em>no roles</em>
+    {% endfor %}
+  </p>
+
+  {% if is_panel_admin %}
+    <p><a href="{% url 'panel:user_list' %}">Go to the admin panel →</a></p>
+  {% endif %}
+{% endblock %}

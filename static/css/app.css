@@ -1,0 +1,266 @@
+:root {
+  --border: #d8dbe0;
+  --muted: #6b7280;
+  --accent: #2b5fd9;
+  /* Поля страницы растут вместе с окном: 12px в узком, 24px в широком. */
+  --gutter: clamp(0.75rem, 2.5vw, 1.5rem);
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  font: 15px/1.5 system-ui, "Segoe UI", Arial, sans-serif;
+  color: #16181d;
+  background: #f7f8fa;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  padding: 0.75rem var(--gutter);
+  background: #fff;
+  border-bottom: 1px solid var(--border);
+  /* Ссылок в шапке до шести: в узком окне они переносятся, а не режутся. */
+  flex-wrap: wrap;
+}
+
+.topbar .brand { font-weight: 600; text-decoration: none; color: inherit; }
+
+/* Меню стоит сразу за названием, а не у правого края окна. Так оно остаётся
+   на виду, когда окно браузера перекрыто другим окном справа или частично
+   уехало за границу экрана — ситуация, которую страница обнаружить не может. */
+.topbar nav {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  flex-wrap: wrap;
+}
+
+.topbar .who { color: var(--muted); }
+
+main { max-width: 62rem; margin: 0 auto; padding: var(--gutter); }
+
+h1 { font-size: 1.4rem; overflow-wrap: break-word; }
+
+a { color: var(--accent); }
+
+form.inline { display: inline; }
+
+.toolbar {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+.card {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1rem 1.25rem;
+}
+
+.form-narrow { max-width: 28rem; }
+
+/* Таблицы прокручиваются внутри обёртки. Самой <table> display менять нельзя:
+   это ломает дерево доступности, а на нём держатся E2E-локаторы по ролям. */
+.table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+  /* Рамка теперь на обёртке, иначе получается двойная линия. */
+  border: 0;
+}
+
+th, td {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+tr:last-child td { border-bottom: 0; }
+
+th {
+  background: #f0f2f5;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+td.actions { white-space: nowrap; }
+
+.badge {
+  display: inline-block;
+  padding: 0.05rem 0.5rem;
+  margin-right: 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #eef2ff;
+  font-size: 0.85rem;
+}
+
+input[type="text"],
+input[type="search"],
+input[type="password"],
+input[type="email"] {
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  width: 100%;
+  max-width: 100%;
+}
+
+.topbar input, .toolbar input { width: auto; }
+
+button, .button {
+  padding: 0.35rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+  text-decoration: none;
+  color: inherit;
+  font: inherit;
+}
+
+button:hover, .button:hover { background: #f0f2f5; }
+
+.messages { list-style: none; padding: 0; margin: 0 0 1rem; }
+
+.message {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  margin-bottom: 0.5rem;
+  background: #fff;
+  overflow-wrap: break-word;
+}
+
+.message.success { border-color: #22c55e; background: #f0fdf4; }
+.message.error { border-color: #ef4444; background: #fef2f2; }
+
+.errors { color: #b91c1c; margin: 0.25rem 0; padding-left: 1rem; }
+.hint, .helptext { color: var(--muted); font-size: 0.9rem; }
+
+.pagination {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  margin-top: 1rem;
+  flex-wrap: wrap;
+}
+
+ul#id_groups { list-style: none; padding-left: 0; }
+
+/* Внутри прокручиваемой обёртки ячейки не переносятся: ширину держит таблица,
+   а лишнее уезжает в горизонтальный скролл. Так имя файла остаётся читаемым
+   целиком, а не рвётся посреди слова. */
+.table-wrap th,
+.table-wrap td { white-space: nowrap; }
+
+/* ------------------------------------------------------------------------
+   Узкое окно: сюда попадает и телефон, и окно браузера, прижатое к половине
+   экрана. Правила завязаны на ширину окна, а не на тип устройства, поэтому
+   раскладка перестраивается одинаково в обоих случаях.
+   ------------------------------------------------------------------------ */
+
+@media (max-width: 860px) {
+  .toolbar {
+    /* Поиск и «новый пользователь» перестают тесниться в одну строку. */
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .toolbar form,
+  .toolbar .button {
+    width: 100%;
+  }
+
+  .toolbar form.inline {
+    display: flex;
+    gap: 0.5rem;
+  }
+
+  .toolbar .button { text-align: center; }
+
+  .toolbar input,
+  .topbar input { width: 100%; }
+
+  .inline-form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+  }
+
+  .inline-form input[type="text"],
+  .inline-form input[type="file"] { flex: 1 1 12rem; }
+}
+
+@media (max-width: 560px) {
+  body { font-size: 16px; }
+
+  .topbar {
+    /* Бренд на своей строке, меню под ним — иначе на 360px всё слипается. */
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+
+  .topbar nav {
+    width: 100%;
+    row-gap: 0.4rem;
+  }
+
+  h1 { font-size: 1.2rem; }
+
+  .card { padding: 0.9rem 1rem; }
+
+  th, td { padding: 0.5rem 0.6rem; }
+
+  /* На телефоне поле ввода мельче 16px заставляет iOS зумить страницу. */
+  input[type="text"],
+  input[type="search"],
+  input[type="password"],
+  input[type="email"],
+  select,
+  textarea { font-size: 16px; }
+
+  .inline-form button,
+  .inline-form .button { width: 100%; }
+}
+
+/* Палец — не мышь: на сенсорных экранах кнопки и ссылки в строках таблицы
+   получают высоту, в которую реально попасть. */
+@media (pointer: coarse) {
+  button,
+  .button,
+  .topbar nav a,
+  td.actions a {
+    min-height: 2.75rem;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  td.actions a { padding: 0 0.25rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}

@@ -1,0 +1,53 @@
+version: 2
+updates:
+  # Application dependencies and development tools.
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      python-deps:
+        patterns: ["*"]
+
+  # Browser tests. Playwright ships often, and the package version must
+  # match the browser version CI installs.
+  - package-ecosystem: npm
+    directory: "/e2e"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      e2e-deps:
+        patterns: ["*"]
+
+  # Without grouping every action arrives as its own PR, and there are six.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  # The base image from the Dockerfile.
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      docker-images:
+        patterns: ["*"]
+
+  # Images from docker-compose.yml (postgres, localstack) are a separate
+  # ecosystem; ecosystem: docker does not see them.
+  - package-ecosystem: docker-compose
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      compose-images:
+        patterns: ["*"]

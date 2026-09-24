@@ -1,0 +1,10 @@
+# LF everywhere: CRLF breaks shell scripts inside the container.
+* text=auto eol=lf
+*.sh text eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.sqlite3 binary

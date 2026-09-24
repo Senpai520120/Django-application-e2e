@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+
+{% block title %}Users — panel{% endblock %}
+
+{% block content %}
+  <h1>Users</h1>
+
+  <div class="toolbar">
+    <form method="get" class="inline">
+      <input type="search" name="q" value="{{ q }}" placeholder="username, email, name">
+      <button type="submit">Search</button>
+      {% if q %}<a href="{% url 'panel:user_list' %}">Reset</a>{% endif %}
+    </form>
+    <a class="button" href="{% url 'panel:user_create' %}">+ New user</a>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Username</th>
+          <th>Email</th>
+          <th>Name</th>
+          <th>Roles</th>
+          <th>Flags</th>
+          <th>Active</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in users %}
+          <tr>
+            <td>{{ row.username }}</td>
+            <td>{{ row.email|default:"—" }}</td>
+            <td>{{ row.get_full_name|default:"—" }}</td>
+            <td>
+              {% for group in row.groups.all %}
+                <span class="badge">{{ group.name }}</span>
+              {% empty %}
+                <em>—</em>
+              {% endfor %}
+            </td>
+            <td>
+              {% if row.is_superuser %}<span class="badge">superuser</span>{% endif %}
+              {% if row.is_staff %}<span class="badge">staff</span>{% endif %}
+              {% if not row.is_superuser and not row.is_staff %}<em>—</em>{% endif %}
+            </td>
+            <td>{% if row.is_active %}yes{% else %}no{% endif %}</td>
+            <td class="actions">
+              <a href="{% url 'panel:user_roles' row.pk %}?next={{ request.get_full_path|urlencode }}">Roles</a>
+              <form method="post" action="{% url 'panel:user_toggle_active' row.pk %}" class="inline">
+                {% csrf_token %}
+                <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                <button type="submit">{% if row.is_active %}Deactivate{% else %}Activate{% endif %}</button>
+              </form>
+            </td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="7"><em>Nothing found.</em></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if is_paginated %}
+    <nav class="pagination">
+      {% if page_obj.has_previous %}
+        <a href="?page={{ page_obj.previous_page_number }}{% if q %}&amp;q={{ q|urlencode }}{% endif %}">← Back</a>
+      {% endif %}
+      <span>Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span>
+      {% if page_obj.has_next %}
+        <a href="?page={{ page_obj.next_page_number }}{% if q %}&amp;q={{ q|urlencode }}{% endif %}">Next →</a>
+      {% endif %}
+    </nav>
+  {% endif %}
+{% endblock %}

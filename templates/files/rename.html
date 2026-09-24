@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+
+{% block title %}Rename {{ name }}{% endblock %}
+
+{% block content %}
+  <h1>Rename {% if is_dir %}folder{% else %}file{% endif %} &laquo;{{ name }}&raquo;</h1>
+
+  <form method="post" class="card form-narrow">
+    {% csrf_token %}
+    <input type="hidden" name="path" value="{{ path }}">
+
+    {% if form.non_field_errors %}
+      <ul class="errors">
+        {% for error in form.non_field_errors %}<li>{{ error }}</li>{% endfor %}
+      </ul>
+    {% endif %}
+
+    <p>
+      <label for="id_new_name">New name</label>
+      <input type="text" id="id_new_name" name="new_name" value="{{ form.new_name.value|default:name }}"
+             required maxlength="120" data-testid="new-name">
+      {% if form.new_name.errors %}
+        <span class="errors">{{ form.new_name.errors|striptags }}</span>
+      {% endif %}
+    </p>
+
+    <button type="submit" data-testid="rename-submit">Save</button>
+    <a href="{% url 'files:browse' %}?path={{ parent|urlencode }}">Cancel</a>
+  </form>
+{% endblock %}

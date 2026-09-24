@@ -1,0 +1,43 @@
+{% load static %}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Users &amp; Roles{% endblock %}</title>
+  <link rel="stylesheet" href="{% static 'css/app.css' %}">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="{% url 'home' %}">Users &amp; Roles</a>
+  <nav>
+    {% if user.is_authenticated %}
+      <a href="{% url 'files:browse' %}">Files</a>
+      {% if is_panel_admin %}
+        <a href="{% url 'panel:user_list' %}">Users</a>
+        <a href="{% url 'panel:role_list' %}">Roles</a>
+        <a href="{% url 'panel:audit_log' %}">Audit</a>
+      {% endif %}
+      <span class="who">{{ user.username }}</span>
+      <form method="post" action="{% url 'logout' %}" class="inline">
+        {% csrf_token %}
+        <button type="submit">Sign out</button>
+      </form>
+    {% else %}
+      <a href="{% url 'login' %}">Sign in</a>
+    {% endif %}
+  </nav>
+</header>
+
+<main>
+  {% if messages %}
+    <ul class="messages" role="status" aria-live="polite">
+      {% for message in messages %}
+        <li class="message {{ message.tags }}">{{ message }}</li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+
+{% block title %}Delete {{ name }}{% endblock %}
+
+{% block content %}
+  <h1>Delete {% if is_dir %}folder{% else %}file{% endif %} &laquo;{{ name }}&raquo;?</h1>
+
+  {% if is_dir %}
+    <p class="warning" data-testid="recursive-warning">
+      The folder will be deleted with everything inside. This cannot be undone.
+    </p>
+  {% else %}
+    <p>The file will be deleted permanently.</p>
+  {% endif %}
+
+  <form method="post" class="card form-narrow">
+    {% csrf_token %}
+    <input type="hidden" name="path" value="{{ path }}">
+    <button type="submit" data-testid="delete-confirm">Delete</button>
+    <a href="{% url 'files:browse' %}?path={{ parent|urlencode }}" data-testid="delete-cancel">Cancel</a>
+  </form>
+{% endblock %}

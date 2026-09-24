@@ -20,3 +20,9 @@ htmlcov/
 .ruff_cache/
 .idea/
 .vscode/
+
+./deplaterraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+crash.log

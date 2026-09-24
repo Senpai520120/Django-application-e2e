@@ -1,0 +1,66 @@
+name: users-and-roles
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: users_roles
+      POSTGRES_USER: users_roles
+      POSTGRES_PASSWORD: users_roles
+      LC_MESSAGES: en_US.UTF-8
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U users_roles"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    # Loopback only: the short form binds to 0.0.0.0, which would put a database
+    # with credentials from this file on every interface of the machine.
+    ports:
+      - "127.0.0.1:5434:5432"
+
+  web:
+    build: .
+    env_file:
+      - .env
+    # Overrides .env
+    environment:
+      DEBUG: "False"
+      DATABASE_URL: postgres://users_roles:users_roles@db:5432/users_roles
+      # Demo demo_* accounts on start. Drop this or set "0" in production.
+      SEED_DEMO_USERS: "1"
+      # File manager. For s3 mode: FILE_STORAGE_BACKEND=s3 in .env, plus a
+      # bucket and keys (or the s3 profile with localstack below).
+      FILE_STORAGE_BACKEND: ${FILE_STORAGE_BACKEND:-local}
+      FILE_MANAGER_ROOT: /app/filemanager
+      FILE_MANAGER_MAX_FILE_SIZE: "5242880"
+    ports:
+      - "8000:8000"
+    volumes:
+      - filestore:/app/filemanager
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/login/')"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # Local S3 to exercise s3 mode without a cloud: docker compose --profile s3 up
+  localstack:
+    image: localstack/localstack:3
+    profiles: ["s3"]
+    environment:
+      SERVICES: s3
+      AWS_DEFAULT_REGION: eu-central-1
+    ports:
+      - "4566:4566"
+
+volumes:
+  pgdata:
+  filestore:

@@ -1,0 +1,66 @@
+#!/bin/bash
+set -euxo pipefail
+
+# Docker from the official Ubuntu package repository.
+apt-get update
+apt-get install -y docker.io docker-compose-v2
+
+systemctl enable --now docker
+
+install -d -m 0750 /opt/app
+cd /opt/app
+
+# The public address is not known in advance, so it is read from instance
+# metadata (IMDSv2, token required) and put into ALLOWED_HOSTS instead of a
+# wildcard.
+IMDS_TOKEN=$(curl -sX PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
+PUBLIC_IP=$(curl -s -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/meta-data/public-ipv4)
+
+# Secrets are written on the instance; the repository holds none of them.
+cat > .env <<ENV
+SECRET_KEY=${secret_key}
+DEBUG=False
+ALLOWED_HOSTS=$PUBLIC_IP,localhost,127.0.0.1
+DATABASE_URL=postgres://users_roles:${db_password}@db:5432/users_roles
+FILE_STORAGE_BACKEND=s3
+AWS_STORAGE_BUCKET_NAME=${bucket}
+AWS_S3_REGION_NAME=${region}
+FILE_MANAGER_S3_LOCATION=filemanager
+SEED_DEMO_USERS=1
+USE_X_FORWARDED_PROTO=False
+ENV
+chmod 0640 .env
+
+# AWS keys are left unset on purpose: boto3 picks up temporary credentials
+# from the instance IAM role through IMDSv2.
+cat > compose.yaml <<COMPOSE
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: users_roles
+      POSTGRES_USER: users_roles
+      POSTGRES_PASSWORD: ${db_password}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U users_roles"]
+      interval: 5s
+      retries: 10
+
+  web:
+    image: ${image}
+    env_file: [.env]
+    ports:
+      - "80:8000"
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+COMPOSE
+
+docker compose -f compose.yaml up -d

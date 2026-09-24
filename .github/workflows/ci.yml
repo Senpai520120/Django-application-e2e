@@ -1,0 +1,314 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+# A new push to a branch cancels the previous unfinished run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  # At least 50 characters, otherwise check --deploy complains (security.W009).
+  SECRET_KEY: ci-secret-key-not-for-production-0123456789-abcdefghij
+  DEBUG: "False"
+
+jobs:
+  lint:
+    name: Linters
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - run: pip install -r requirements-dev.txt
+
+      - name: ruff
+        run: ruff check --output-format=github .
+
+      - name: black
+        run: black --check --diff .
+
+  django-checks:
+    name: Django checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: manage.py check
+        run: python manage.py check
+
+      - name: Missing migrations
+        run: python manage.py makemigrations --check --dry-run
+
+      - name: Production settings audit (as if behind HTTPS)
+        env:
+          SESSION_COOKIE_SECURE: "True"
+          CSRF_COOKIE_SECURE: "True"
+          SECURE_SSL_REDIRECT: "True"
+          SECURE_HSTS_SECONDS: "31536000"
+          SECURE_HSTS_INCLUDE_SUBDOMAINS: "True"
+          SECURE_HSTS_PRELOAD: "True"
+        run: python manage.py check --deploy --fail-level WARNING
+
+  test:
+    name: Tests (Python ${{ matrix.python-version }}, PostgreSQL)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: users_roles
+          POSTGRES_USER: users_roles
+          POSTGRES_PASSWORD: users_roles
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://users_roles:users_roles@localhost:5432/users_roles
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - run: pip install -r requirements-dev.txt
+
+      - name: Migrations on a clean database
+        run: python manage.py migrate --noinput
+
+      - name: pytest with coverage
+        run: pytest --cov --cov-report=term-missing --cov-report=xml --cov-fail-under=90
+
+      - name: Upload the coverage report
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: coverage.xml
+          if-no-files-found: error
+
+  compose-smoke:
+    name: docker compose up plus an HTTP check
+    runs-on: ubuntu-latest
+    needs: [lint, django-checks, test]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Prepare .env
+        run: |
+          cp .env.example .env
+          KEY=$(python -c "import secrets; print(secrets.token_urlsafe(64))")
+          sed -i "s|^SECRET_KEY=.*|SECRET_KEY=$KEY|" .env
+
+      - name: Start the stack
+        run: docker compose up -d --build
+
+      - name: Wait for the app
+        run: |
+          for _ in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/login/ || true)
+            if [ "$code" = "200" ]; then echo "the app answers"; exit 0; fi
+            sleep 2
+          done
+          echo "the app never came up, last code: $code"
+          exit 1
+
+      - name: Roles are seeded and anonymous access is closed
+        run: |
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/manage/)" = "302"
+          docker compose exec -T web python manage.py shell -c "
+          names = sorted(Group.objects.values_list('name', flat=True))
+          assert names == ['admin', 'user'], names
+          print('roles in the database:', names)"
+
+      - name: Demo data is seeded and an admin can sign in
+        run: |
+          curl -s -c /tmp/cj -o /dev/null http://127.0.0.1:8000/login/
+          CSRF=$(awk '$6 == "csrftoken" {print $7}' /tmp/cj)
+          CODE=$(curl -s -b /tmp/cj -c /tmp/cj -o /dev/null -w '%{http_code}'             -X POST http://127.0.0.1:8000/login/             -d "csrfmiddlewaretoken=$CSRF&username=demo_admin&password=demo-password-123")
+          test "$CODE" = "302"
+          test "$(curl -s -b /tmp/cj -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/manage/)" = "200"
+          test "$(curl -s -b /tmp/cj -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/files/)" = "200"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/files/)" = "302"
+
+      - name: Container logs
+        if: failure()
+        run: docker compose logs
+
+      - name: Shut the stack down
+        if: always()
+        run: docker compose down -v
+
+  e2e:
+    name: E2E (Playwright)
+    runs-on: ubuntu-latest
+    needs: [lint, django-checks, test]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Prepare .env
+        run: |
+          cp .env.example .env
+          KEY=$(python -c "import secrets; print(secrets.token_urlsafe(64))")
+          sed -i "s|^SECRET_KEY=.*|SECRET_KEY=$KEY|" .env
+
+      - name: Start the stack
+        run: docker compose up -d --build
+
+      - name: Wait for the app
+        run: |
+          for _ in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/login/ || true)
+            if [ "$code" = "200" ]; then exit 0; fi
+            sleep 2
+          done
+          echo "the app never came up"
+          exit 1
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Install Playwright
+        working-directory: e2e
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Run E2E (local storage)
+        working-directory: e2e
+        env:
+          BASE_URL: http://127.0.0.1:8000
+          E2E_MAX_FILE_SIZE: "5242880"
+        run: npx playwright test
+
+      # The same set of scenarios against S3 mode. No real AWS needed: the
+      # bucket is played by localstack from the s3 profile in docker-compose.
+      - name: Restart the stack in S3 mode
+        env:
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          docker compose down -v
+          KEY=$(python -c "import secrets; print(secrets.token_urlsafe(64))")
+          cat > .env <<ENV
+          SECRET_KEY=$KEY
+          FILE_STORAGE_BACKEND=s3
+          FILE_MANAGER_S3_LOCATION=filemanager
+          AWS_STORAGE_BUCKET_NAME=e2e-bucket
+          AWS_S3_REGION_NAME=us-east-1
+          AWS_S3_ENDPOINT_URL=http://localstack:4566
+          AWS_S3_ADDRESSING_STYLE=path
+          AWS_ACCESS_KEY_ID=test
+          AWS_SECRET_ACCESS_KEY=test
+          ENV
+          FILE_STORAGE_BACKEND=s3 docker compose --profile s3 up -d --build
+
+          for _ in $(seq 1 40); do
+            if curl -sf http://127.0.0.1:4566/_localstack/health > /dev/null; then break; fi
+            sleep 3
+          done
+          aws --endpoint-url=http://127.0.0.1:4566 s3 mb s3://e2e-bucket
+
+          for _ in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/login/ || true)
+            if [ "$code" = "200" ]; then exit 0; fi
+            sleep 2
+          done
+          echo "the app never came up in S3 mode"
+          exit 1
+
+      - name: Run E2E (S3 through localstack)
+        working-directory: e2e
+        env:
+          BASE_URL: http://127.0.0.1:8000
+          E2E_MAX_FILE_SIZE: "5242880"
+        run: npx playwright test
+
+      - name: Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: e2e/playwright-report/
+          retention-days: 7
+
+      - name: Container logs
+        if: failure()
+        run: docker compose logs
+
+      - name: Shut the stack down
+        if: always()
+        run: docker compose down -v
+
+  publish:
+    name: Publish the image to GHCR
+    runs-on: ubuntu-latest
+    needs: [compose-smoke, e2e]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
