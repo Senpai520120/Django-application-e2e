@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+.venv/
+.tools/
+venv/
+.env
+.mcp.json
+
+# Keys and certificates next to the project must never reach git.
+*.pem
+*.key
+*.ppk
+*.sqlite3
+staticfiles/
+filemanager/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.ruff_cache/
+.idea/
+.vscode/
