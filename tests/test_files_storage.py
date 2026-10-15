@@ -239,6 +239,19 @@ def test_local_storage_blocks_symlink_escape(tmp_path):
         storage.list_dir("link")
 
 
+@pytest.mark.parametrize("parent", ["notes.txt", "missing"])
+def test_parent_must_be_an_existing_folder(storage, parent):
+    """A file or a missing folder as the parent is refused the same way by both."""
+    storage.save("notes.txt", upload("notes.txt"))
+
+    with pytest.raises(StorageError):
+        storage.make_dir(f"{parent}/sub")
+    with pytest.raises(StorageError):
+        storage.save(f"{parent}/a.txt", upload("a.txt"))
+
+    assert [entry.name for entry in storage.list_dir()] == ["notes.txt"]
+
+
 class ThirdBackend(LocalFileStorage):
     """Stands in for a third backend: any FileManagerStorage subclass."""
 

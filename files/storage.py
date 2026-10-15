@@ -22,7 +22,7 @@ from django.core.exceptions import ImproperlyConfigured, SuspiciousFileOperation
 from django.core.files.storage import FileSystemStorage, storages
 from django.utils import timezone
 
-from files.paths import normalize_path
+from files.paths import clean_name, normalize_path, parent_path
 
 #: An empty folder in S3 is a zero-length object whose key ends with "/".
 S3_DIR_MARKER_SUFFIX = "/"
@@ -96,6 +96,17 @@ class FileManagerStorage(ABC):
     def total_size(self) -> int:
         """Total size of the storage, used for the overall size limit."""
 
+    def _check_parent(self, path: str) -> None:
+        """New entries go only into a folder that exists.
+
+        The path comes from a hidden form field, so it can be forged:
+        "notes.txt/new" would make the local disk fail with an OSError and S3
+        quietly invent a folder next to the file. Both refuse it here instead.
+        """
+        parent = parent_path(normalize_path(path))
+        if parent and not self.is_dir(parent):
+            raise StorageError("The parent folder does not exist.")
+
 
 class LocalFileStorage(FileManagerStorage):
     """Files physically live on the server disk."""
@@ -151,12 +162,14 @@ class LocalFileStorage(FileManagerStorage):
         target = self._absolute(path)
         if target.exists():
             raise StorageError("A folder or file with this name already exists.")
-        target.mkdir(parents=True)
+        self._check_parent(path)
+        target.mkdir()
 
     def save(self, path: str, file) -> str:
         relative = normalize_path(path)
         if self.exists(relative):
             raise StorageError("A file with this name already exists.")
+        self._check_parent(relative)
         return self._storage.save(relative, file)
 
     def open(self, path: str):
@@ -180,8 +193,6 @@ class LocalFileStorage(FileManagerStorage):
             target.unlink()
 
     def rename(self, path: str, new_name: str) -> str:
-        from files.paths import clean_name, parent_path
-
         relative = normalize_path(path)
         if not relative:
             raise StorageError("The root folder cannot be renamed.")
@@ -297,6 +308,7 @@ class S3FileStorage(FileManagerStorage):
             raise StorageError("Empty folder name.")
         if self.exists(relative):
             raise StorageError("A folder or file with this name already exists.")
+        self._check_parent(relative)
         self._client.put_object(
             Bucket=self._bucket, Key=self._dir_prefix(relative), Body=b""
         )
@@ -305,6 +317,7 @@ class S3FileStorage(FileManagerStorage):
         relative = normalize_path(path)
         if self.exists(relative):
             raise StorageError("A file with this name already exists.")
+        self._check_parent(relative)
         return self._storage.save(relative, file)
 
     def open(self, path: str):
@@ -340,8 +353,6 @@ class S3FileStorage(FileManagerStorage):
             self._client.delete_objects(Bucket=self._bucket, Delete={"Objects": batch})
 
     def rename(self, path: str, new_name: str) -> str:
-        from files.paths import clean_name, parent_path
-
         relative = normalize_path(path)
         if not relative:
             raise StorageError("The root folder cannot be renamed.")
