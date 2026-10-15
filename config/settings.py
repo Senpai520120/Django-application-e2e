@@ -115,27 +115,52 @@ _default_staticfiles_backend = (
     else "whitenoise.storage.CompressedManifestStaticFilesStorage"
 )
 # File manager: local is the server disk, s3 is a bucket via django-storages.
+# FILE_STORAGE_BACKEND picks the backend the way DATABASE_URL picks the
+# database: "local", "s3", or the dotted path of any other
+# files.storage.FileManagerStorage subclass. The file manager reads
+# STORAGES["filemanager"], so a third backend is a class plus this variable.
 FILE_STORAGE_BACKEND = env("FILE_STORAGE_BACKEND")
-_default_file_backends = {
-    "local": "django.core.files.storage.FileSystemStorage",
-    "s3": "storages.backends.s3.S3Storage",
+_file_backends = {
+    "local": {
+        "default": "django.core.files.storage.FileSystemStorage",
+        "filemanager": "files.storage.LocalFileStorage",
+        "OPTIONS": {
+            "location": env("FILE_MANAGER_ROOT", default=str(BASE_DIR / "filemanager"))
+        },
+    },
+    "s3": {
+        "default": "storages.backends.s3.S3Storage",
+        "filemanager": "files.storage.S3FileStorage",
+        "OPTIONS": {"location": env("FILE_MANAGER_S3_LOCATION", default="filemanager")},
+    },
 }
-if FILE_STORAGE_BACKEND not in _default_file_backends:
+if FILE_STORAGE_BACKEND in _file_backends:
+    _file_backend = _file_backends[FILE_STORAGE_BACKEND]
+elif "." in FILE_STORAGE_BACKEND:
+    # A custom backend reads its own settings, like any Django storage.
+    _file_backend = {
+        "default": _file_backends["local"]["default"],
+        "filemanager": FILE_STORAGE_BACKEND,
+        "OPTIONS": {},
+    }
+else:
     raise ImproperlyConfigured(
-        f"FILE_STORAGE_BACKEND={FILE_STORAGE_BACKEND!r}: expected local or s3."
+        f"FILE_STORAGE_BACKEND={FILE_STORAGE_BACKEND!r}: expected local, s3 "
+        "or the dotted path of a FileManagerStorage subclass."
     )
 
 STORAGES = {
-    "default": {"BACKEND": _default_file_backends[FILE_STORAGE_BACKEND]},
+    "default": {"BACKEND": _file_backend["default"]},
+    "filemanager": {
+        "BACKEND": _file_backend["filemanager"],
+        "OPTIONS": _file_backend["OPTIONS"],
+    },
     "staticfiles": {
         "BACKEND": env("STATICFILES_BACKEND", default=_default_staticfiles_backend)
     },
 }
 
 FILE_MANAGER = {
-    "BACKEND": FILE_STORAGE_BACKEND,
-    "ROOT": env("FILE_MANAGER_ROOT", default=str(BASE_DIR / "filemanager")),
-    "S3_LOCATION": env("FILE_MANAGER_S3_LOCATION", default="filemanager"),
     "MAX_FILE_SIZE": env("FILE_MANAGER_MAX_FILE_SIZE"),
     "MAX_TOTAL_SIZE": env("FILE_MANAGER_MAX_TOTAL_SIZE"),
 }

@@ -15,10 +15,12 @@ FILE_URLS = [
 @pytest.fixture
 def file_root(tmp_path, settings):
     """Each test works in its own folder, so leftovers never travel between tests."""
-    settings.FILE_MANAGER = {
-        **settings.FILE_MANAGER,
-        "BACKEND": "local",
-        "ROOT": str(tmp_path / "storage"),
+    settings.STORAGES = {
+        **settings.STORAGES,
+        "filemanager": {
+            "BACKEND": "files.storage.LocalFileStorage",
+            "OPTIONS": {"location": str(tmp_path / "storage")},
+        },
     }
     return tmp_path / "storage"
 

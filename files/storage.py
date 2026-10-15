@@ -3,8 +3,9 @@
 The views talk to this interface only and never learn where the files live.
 The implementations sit on top of the stock `django.core.files.storage`:
 `FileSystemStorage` locally, `S3Boto3Storage` from django-storages in
-production. Adding a third backend means writing one more subclass and
-returning it from `get_storage()`; templates and views stay untouched.
+production. Which one runs is decided by STORAGES["filemanager"] in settings.
+Adding a third backend means writing one more subclass and naming it in
+FILE_STORAGE_BACKEND; this module, the views and the templates stay untouched.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from pathlib import Path
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, SuspiciousFileOperation
-from django.core.files.storage import FileSystemStorage
+from django.core.files.storage import FileSystemStorage, storages
 from django.utils import timezone
 
 from files.paths import normalize_path
@@ -28,6 +29,9 @@ S3_DIR_MARKER_SUFFIX = "/"
 
 #: How many keys S3 removes in a single delete_objects request.
 S3_DELETE_BATCH = 1000
+
+#: The STORAGES alias the file manager works with.
+FILE_MANAGER_STORAGE = "filemanager"
 
 
 @dataclass(frozen=True)
@@ -403,15 +407,15 @@ class S3FileStorage(FileManagerStorage):
 
 
 def get_storage() -> FileManagerStorage:
-    """The storage chosen by settings. The only place a backend is picked."""
-    backend = settings.FILE_MANAGER["BACKEND"]
+    """The storage configured in STORAGES["filemanager"].
 
-    if backend == "local":
-        return LocalFileStorage(settings.FILE_MANAGER["ROOT"])
-    if backend == "s3":
-        return S3FileStorage(location=settings.FILE_MANAGER["S3_LOCATION"])
-
-    raise ImproperlyConfigured(
-        f"Unknown file manager backend: {backend!r}. "
-        "Allowed values of FILE_STORAGE_BACKEND: local, s3."
-    )
+    Django's own storage registry builds it from BACKEND and OPTIONS, the same
+    way it builds STORAGES["default"], so no backend is named in code here.
+    """
+    storage = storages[FILE_MANAGER_STORAGE]
+    if not isinstance(storage, FileManagerStorage):
+        raise ImproperlyConfigured(
+            f'STORAGES["{FILE_MANAGER_STORAGE}"] must be a FileManagerStorage, '
+            f"got {type(storage).__name__}."
+        )
+    return storage

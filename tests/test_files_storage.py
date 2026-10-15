@@ -6,11 +6,11 @@ The very same set of checks runs twice: against the local disk and against S3
 
 import boto3
 import pytest
-from django.core.exceptions import SuspiciousFileOperation
+from django.core.exceptions import ImproperlyConfigured, SuspiciousFileOperation
 from django.core.files.uploadedfile import SimpleUploadedFile
 from moto import mock_aws
 
-from files.storage import LocalFileStorage, S3FileStorage, StorageError
+from files.storage import LocalFileStorage, S3FileStorage, StorageError, get_storage
 
 BUCKET = "test-file-manager"
 REGION = "eu-central-1"
@@ -237,3 +237,38 @@ def test_local_storage_blocks_symlink_escape(tmp_path):
 
     with pytest.raises(SuspiciousFileOperation):
         storage.list_dir("link")
+
+
+class ThirdBackend(LocalFileStorage):
+    """Stands in for a third backend: any FileManagerStorage subclass."""
+
+
+@pytest.mark.parametrize(
+    ("backend", "expected"),
+    [
+        ("files.storage.LocalFileStorage", LocalFileStorage),
+        (f"{__name__}.ThirdBackend", ThirdBackend),
+    ],
+)
+def test_get_storage_builds_the_backend_named_in_storages(
+    settings, tmp_path, backend, expected
+):
+    settings.STORAGES = {
+        **settings.STORAGES,
+        "filemanager": {"BACKEND": backend, "OPTIONS": {"location": str(tmp_path)}},
+    }
+
+    storage = get_storage()
+
+    assert type(storage) is expected
+    assert storage.exists("") is True
+
+
+def test_get_storage_rejects_a_plain_django_storage(settings):
+    settings.STORAGES = {
+        **settings.STORAGES,
+        "filemanager": {"BACKEND": "django.core.files.storage.InMemoryStorage"},
+    }
+
+    with pytest.raises(ImproperlyConfigured):
+        get_storage()
