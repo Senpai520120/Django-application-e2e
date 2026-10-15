@@ -26,8 +26,15 @@ class UserRolesPage(BasePage):
         self.submit(self.save_button)
 
     def role_id(self, role: str) -> str:
-        """The role's number in the database: the value of its checkbox."""
-        return self.role_checkbox(role).get_attribute("value") or ""
+        """The role's number in the database: the value of its checkbox.
+
+        Never empty: a form sent with an empty role would be refused for
+        that reason alone, and a test of the permission check would prove
+        nothing.
+        """
+        value = self.role_checkbox(role).get_attribute("value")
+        assert value, f'the "{role}" checkbox has no value'
+        return value
 
     def error_message(self, text: str):
         return self.page.get_by_text(text)

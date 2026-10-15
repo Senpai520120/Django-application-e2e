@@ -37,6 +37,7 @@ def send_form(page: Page, path: str, data: dict) -> APIResponse:
     """
     cookies = page.context.cookies()
     csrf_token = next(
-        c.get("value", "") for c in cookies if c.get("name") == "csrftoken"
+        (c.get("value") for c in cookies if c.get("name") == "csrftoken"), None
     )
+    assert csrf_token, "no csrftoken cookie: open a page with a form first"
     return page.request.post(path, form={"csrfmiddlewaretoken": csrf_token, **data})

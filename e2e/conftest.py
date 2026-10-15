@@ -26,6 +26,15 @@ from pages.files_page import FilesPage
 from pages.user_create_page import UserCreatePage
 from pages.users_page import UsersPage
 
+# --- address of the app ---
+
+
+@pytest.fixture(scope="session")
+def base_url(pytestconfig) -> str:
+    """Where page.goto("/files/") goes: --base-url if given, else BASE_URL."""
+    return pytestconfig.getoption("base_url") or config.BASE_URL
+
+
 # --- signed-in browser tabs ---
 
 
@@ -71,12 +80,27 @@ def new_user(admin_browser: Page):
 
     yield user
 
-    # Cleanup. The panel cannot delete users, so we switch the user off:
-    # then nobody can sign in with this test account.
+    switch_off(admin_browser, user.username)
+
+
+@pytest.fixture
+def username_to_create(admin_browser: Page):
+    """A unique name for a user the test creates itself, switched off after it."""
+    username = unique_name("user")
+
+    yield username
+
+    switch_off(admin_browser, username)
+
+
+def switch_off(admin_browser: Page, username: str) -> None:
+    """Cleanup. The panel cannot delete users, so we switch the user off:
+    then nobody can sign in with this test account.
+    """
     users_page = UsersPage(admin_browser).open()
-    users_page.search(user.username)
-    if users_page.deactivate_button(user.username).count() > 0:
-        users_page.deactivate(user.username)
+    users_page.search(username)
+    if users_page.deactivate_button(username).count() > 0:
+        users_page.deactivate(username)
 
 
 # --- file manager ---

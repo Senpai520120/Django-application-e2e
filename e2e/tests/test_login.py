@@ -48,11 +48,12 @@ def test_04_unknown_username_gets_the_same_error(page: Page):
     login_page = LoginPage(page).open()
 
     login_page.sign_in(config.REGULAR_USER.username, "wrong-password")
-    error_for_wrong_password = login_page.error_message.inner_text()
+    error_for_wrong_password = login_page.form_errors.inner_text()
 
     login_page.sign_in("no_such_user_here", "wrong-password")
-    error_for_unknown_user = login_page.error_message.inner_text()
+    error_for_unknown_user = login_page.form_errors.inner_text()
 
+    assert error_for_wrong_password
     assert error_for_unknown_user == error_for_wrong_password
 
 

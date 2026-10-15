@@ -31,16 +31,17 @@ class BasePage:
         )
 
     def submit(self, button) -> None:
-        """Click a button that sends a form, and wait for the server's answer.
+        """Click a button that sends a form, and wait for the page it leads to.
 
-        Without the wait, the next step of a test can open another page
-        before the form has reached the server, and the action is lost.
-        Fast browsers (WebKit) show this at once. So every Page Object
-        method that sends a form clicks through submit().
+        Every form of the app answers with a new page (after a redirect, or
+        the same page with errors). We wait until that page has loaded, not
+        only until the server answered. Otherwise the next step of a test
+        can still see the old page: a check passes on stale content, or a
+        field is filled just before the page is replaced. Fast browsers
+        (WebKit) show this at once. So every Page Object method that sends
+        a form, GET or POST, clicks through submit().
         """
-        with self.page.expect_response(
-            lambda response: response.request.method == "POST"
-        ):
+        with self.page.expect_navigation():
             button.click()
 
     def sign_out(self) -> None:

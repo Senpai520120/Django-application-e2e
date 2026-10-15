@@ -7,7 +7,8 @@ tests run against any copy of the app without editing the code.
 import os
 from dataclasses import dataclass
 
-# Address of the app under test. Also used by pytest.ini through --base-url.
+# Address of the app under test. Used by the base_url fixture in conftest.py;
+# `pytest --base-url ...` on the command line wins over it.
 BASE_URL = os.getenv("BASE_URL", "http://127.0.0.1:8000")
 
 # Password of every demo_* account created by `manage.py seed_demo_users`.

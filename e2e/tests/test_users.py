@@ -22,9 +22,9 @@ def test_12_admin_finds_user_by_search(admin_page: Page):
     expect(users_page.row("demo_user06")).to_have_count(0)
 
 
-def test_13_admin_creates_user(admin_page: Page):
+def test_13_admin_creates_user(admin_page: Page, username_to_create):
     """TC-13: an admin creates a user and finds them in the list."""
-    username = unique_name("user")
+    username = username_to_create
     create_page = UserCreatePage(admin_page).open()
 
     create_page.create_user(username, config.NEW_USER_PASSWORD)

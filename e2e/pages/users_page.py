@@ -1,5 +1,7 @@
 """User list of the admin panel: /manage/"""
 
+import re
+
 from playwright.sync_api import Page
 
 from pages.base_page import BasePage
@@ -17,8 +19,13 @@ class UsersPage(BasePage):
         self.nothing_found = page.get_by_text("Nothing found.")
 
     def search(self, text: str) -> None:
+        """Search and wait for the filtered list.
+
+        Without the wait, a check right after the search (a row count, or
+        "this badge is gone") could run against the old, unfiltered list.
+        """
         self.search_input.fill(text)
-        self.search_button.click()
+        self.submit(self.search_button)
 
     def row(self, username: str):
         """The table row of one user.
@@ -42,13 +49,15 @@ class UsersPage(BasePage):
     def user_id(self, username: str) -> str:
         """The user's number in the database, read from their "Roles" link.
 
-        The link looks like /manage/users/12/roles/, so the number is the
-        fourth part when the address is split by "/".
+        The link looks like /manage/users/12/roles/ (or a full address
+        ending the same way), so we take the number after "/users/".
         """
         self.search(username)
         link = self.row(username).get_by_role("link", name="Roles")
         href = link.get_attribute("href") or ""
-        return href.split("/")[3]
+        match = re.search(r"/users/(\d+)/", href)
+        assert match, f"no user id in the Roles link of {username}: {href!r}"
+        return match.group(1)
 
     def deactivate_button(self, username: str):
         return self.row(username).get_by_role("button", name="Deactivate")
