@@ -368,6 +368,9 @@ e2e/
 ├── helpers.py         unique names, sign-in, sending a form straight to the server
 ├── pages/             Page Objects: login, home, users, roles, audit, files
 ├── docs/test-cases.md TC-01 … TC-43, the description of every scenario
+├── tools/             test_cases.json (the source of the cases) and a script that
+│                      writes docs/test-cases.md or opens "Test case" issues:
+│                      cd e2e && python tools/create_test_case_issues.py --markdown
 └── tests/
     ├── test_login.py     sign-in, wrong password, unknown and inactive user, sign-out
     ├── test_access.py    who reaches /manage/ and /files/, forms sent directly

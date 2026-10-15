@@ -1,0 +1,488 @@
+[
+  {
+    "id": "TC-01",
+    "title": "Anonymous user is sent to the sign-in page",
+    "preconditions": "Not signed in",
+    "steps": [
+      "Open the home page /"
+    ],
+    "expected": "The address becomes /login/?next=/ and the \"Sign in\" heading is shown.",
+    "autotest": "tests/test_login.py::test_01_anonymous_user_is_sent_to_sign_in"
+  },
+  {
+    "id": "TC-02",
+    "title": "User signs in with valid credentials",
+    "preconditions": "Not signed in. Account demo_user / demo-password-123 exists",
+    "steps": [
+      "Open /login/",
+      "Enter username demo_user and password demo-password-123",
+      "Click \"Sign in\""
+    ],
+    "expected": "The home page opens with the heading \"You are signed in as demo_user\". The role \"user\" is listed.",
+    "autotest": "tests/test_login.py::test_02_user_signs_in_with_valid_credentials"
+  },
+  {
+    "id": "TC-03",
+    "title": "Sign-in with a wrong password is rejected",
+    "preconditions": "Not signed in",
+    "steps": [
+      "Open /login/",
+      "Enter username demo_user and password wrong-password",
+      "Click \"Sign in\""
+    ],
+    "expected": "The user stays on /login/. The error \"Please enter a correct username and password\" is shown.",
+    "autotest": "tests/test_login.py::test_03_wrong_password_is_rejected"
+  },
+  {
+    "id": "TC-04",
+    "title": "Unknown username gets the same error as a wrong password",
+    "preconditions": "Not signed in",
+    "steps": [
+      "Sign in as demo_user with a wrong password and note the error text",
+      "Sign in as no_such_user_here with any password"
+    ],
+    "expected": "Both error texts are exactly the same, so the page does not reveal which usernames exist.",
+    "autotest": "tests/test_login.py::test_04_unknown_username_gets_the_same_error"
+  },
+  {
+    "id": "TC-05",
+    "title": "Deactivated user cannot sign in",
+    "preconditions": "Not signed in. Account demo_inactive is switched off",
+    "steps": [
+      "Open /login/",
+      "Enter username demo_inactive and password demo-password-123",
+      "Click \"Sign in\""
+    ],
+    "expected": "The user stays on /login/ and the sign-in error is shown.",
+    "autotest": "tests/test_login.py::test_05_deactivated_user_cannot_sign_in"
+  },
+  {
+    "id": "TC-06",
+    "title": "User signs out",
+    "preconditions": "Signed in as demo_user",
+    "steps": [
+      "Click \"Sign out\" in the header",
+      "Open the home page /"
+    ],
+    "expected": "The home page is not shown: the address becomes /login/?next=/.",
+    "autotest": "tests/test_login.py::test_06_user_signs_out"
+  },
+  {
+    "id": "TC-07",
+    "title": "Header link \"Files\" opens the file manager",
+    "preconditions": "Signed in as demo_user",
+    "steps": [
+      "Open the home page /",
+      "Click \"Files\" in the header"
+    ],
+    "expected": "The address becomes /files/ and the \"Files\" heading is shown.",
+    "autotest": "tests/test_login.py::test_07_header_link_opens_file_manager"
+  },
+  {
+    "id": "TC-08",
+    "title": "Regular user gets \"access denied\" on the admin panel",
+    "preconditions": "Signed in as demo_user (no admin role)",
+    "steps": [
+      "Open /manage/"
+    ],
+    "expected": "The page \"403 — access denied\" is shown instead of the user list.",
+    "autotest": "tests/test_access.py::test_08_regular_user_gets_403_on_admin_panel"
+  },
+  {
+    "id": "TC-09",
+    "title": "Admin opens the admin panel",
+    "preconditions": "Signed in as demo_admin",
+    "steps": [
+      "Open /manage/"
+    ],
+    "expected": "The \"Users\" page opens with the user list; demo_admin is in it.",
+    "autotest": "tests/test_access.py::test_09_admin_opens_admin_panel"
+  },
+  {
+    "id": "TC-10",
+    "title": "Regular user does not see admin links in the header",
+    "preconditions": "Signed in as demo_user",
+    "steps": [
+      "Open the home page /",
+      "Look at the links in the header"
+    ],
+    "expected": "\"Files\" is shown. \"Users\", \"Roles\" and \"Audit\" are not shown.",
+    "autotest": "tests/test_access.py::test_10_regular_user_does_not_see_admin_links"
+  },
+  {
+    "id": "TC-11",
+    "title": "Anonymous user cannot open the file manager",
+    "preconditions": "Not signed in",
+    "steps": [
+      "Open /files/"
+    ],
+    "expected": "The address becomes /login/?next=/files/; no files are shown.",
+    "autotest": "tests/test_access.py::test_11_anonymous_user_cannot_open_file_manager"
+  },
+  {
+    "id": "TC-12",
+    "title": "Admin finds a user by search",
+    "preconditions": "Signed in as demo_admin. Demo users demo_user01…demo_user10 exist",
+    "steps": [
+      "Open /manage/",
+      "Type demo_user05 in the search field",
+      "Click \"Search\""
+    ],
+    "expected": "demo_user05 is in the list. Other users, for example demo_user06, are not.",
+    "autotest": "tests/test_users.py::test_12_admin_finds_user_by_search"
+  },
+  {
+    "id": "TC-13",
+    "title": "Admin creates a new user",
+    "preconditions": "Signed in as demo_admin",
+    "steps": [
+      "Open /manage/users/new/",
+      "Enter a new unique username",
+      "Enter the password E2e-Strong-Pass-42 twice",
+      "Click \"Create\""
+    ],
+    "expected": "The message \"User <username> created.\" is shown. The user is found by search in the list.",
+    "autotest": "tests/test_users.py::test_13_admin_creates_user"
+  },
+  {
+    "id": "TC-14",
+    "title": "New user can sign in",
+    "preconditions": "An admin has created a new user with a known password",
+    "steps": [
+      "Open /login/",
+      "Enter the new user's username and password",
+      "Click \"Sign in\""
+    ],
+    "expected": "The home page opens with \"You are signed in as <username>\".",
+    "autotest": "tests/test_users.py::test_14_new_user_can_sign_in"
+  },
+  {
+    "id": "TC-15",
+    "title": "Password made only of digits is rejected",
+    "preconditions": "Signed in as demo_admin",
+    "steps": [
+      "Open /manage/users/new/",
+      "Enter a new unique username and the password 52012000 twice",
+      "Click \"Create\"",
+      "Search for that username in /manage/"
+    ],
+    "expected": "The form shows \"This password is entirely numeric.\" The search finds nothing: the user was not created.",
+    "autotest": "tests/test_users.py::test_15_numeric_password_is_rejected"
+  },
+  {
+    "id": "TC-16",
+    "title": "Deactivated user cannot sign in any more",
+    "preconditions": "Signed in as demo_admin. A new active user exists",
+    "steps": [
+      "Open /manage/ and find the user",
+      "Click \"Deactivate\" in the user's row",
+      "In another browser, try to sign in as that user"
+    ],
+    "expected": "The message \"User <username> disabled.\" is shown and the button changes to \"Activate\". The sign-in fails with the sign-in error.",
+    "autotest": "tests/test_users.py::test_16_deactivated_user_cannot_sign_in"
+  },
+  {
+    "id": "TC-17",
+    "title": "Admin grants the admin role",
+    "preconditions": "Signed in as demo_admin. A new user without roles exists",
+    "steps": [
+      "Open /manage/ and click \"Roles\" in the user's row",
+      "Tick \"admin\"",
+      "Click \"Save\""
+    ],
+    "expected": "The message \"Roles of <username> updated\" is shown. The user's row shows the \"admin\" role.",
+    "autotest": "tests/test_roles.py::test_17_admin_grants_admin_role"
+  },
+  {
+    "id": "TC-18",
+    "title": "Admin revokes a role",
+    "preconditions": "Signed in as demo_admin. A new user with the \"user\" role exists",
+    "steps": [
+      "Open the user's roles form",
+      "Untick \"user\"",
+      "Click \"Save\""
+    ],
+    "expected": "The user's row no longer shows the \"user\" role.",
+    "autotest": "tests/test_roles.py::test_18_admin_revokes_role"
+  },
+  {
+    "id": "TC-19",
+    "title": "Cancel on the roles form changes nothing",
+    "preconditions": "Signed in as demo_admin. A new user without roles exists",
+    "steps": [
+      "Open the user's roles form",
+      "Tick \"admin\"",
+      "Click \"Cancel\" instead of \"Save\""
+    ],
+    "expected": "The user still has no \"admin\" role.",
+    "autotest": "tests/test_roles.py::test_19_cancel_on_roles_form_changes_nothing"
+  },
+  {
+    "id": "TC-20",
+    "title": "Admin cannot remove the admin role from themselves",
+    "preconditions": "Signed in as demo_admin",
+    "steps": [
+      "Open the roles form of demo_admin",
+      "Untick \"admin\"",
+      "Click \"Save\""
+    ],
+    "expected": "The error \"You cannot take the admin role from yourself…\" is shown. demo_admin keeps the \"admin\" role.",
+    "autotest": "tests/test_roles.py::test_20_admin_cannot_remove_own_admin_role"
+  },
+  {
+    "id": "TC-21",
+    "title": "Role change is written to the audit log",
+    "preconditions": "Signed in as demo_admin. A new user without roles exists",
+    "steps": [
+      "Grant the \"user\" role to the new user",
+      "Open /manage/audit/"
+    ],
+    "expected": "The newest record shows: who = demo_admin, action = granted, role = user, to whom = the new user.",
+    "autotest": "tests/test_roles.py::test_21_role_change_is_written_to_audit_log"
+  },
+  {
+    "id": "TC-22",
+    "title": "Roles page counts a new member",
+    "preconditions": "Signed in as demo_admin. A new user without roles exists",
+    "steps": [
+      "Open /manage/roles/ and note the number of users in \"admin\"",
+      "Grant the \"admin\" role to the new user",
+      "Open /manage/roles/ again"
+    ],
+    "expected": "The number of users in \"admin\" has grown by exactly 1.",
+    "autotest": "tests/test_roles.py::test_22_roles_page_counts_new_member"
+  },
+  {
+    "id": "TC-23",
+    "title": "Create a nested folder and come back by breadcrumbs",
+    "preconditions": "Signed in. An empty working folder is open in /files/",
+    "steps": [
+      "Create a folder",
+      "Open it",
+      "Click the working folder's name in the breadcrumbs",
+      "Click \"Root\" in the breadcrumbs"
+    ],
+    "expected": "1: the folder is in the list. 2: it shows \"Folder is empty.\" 3: the working folder is open and the new folder is in it. 4: the root is open and the working folder is in it.",
+    "autotest": "tests/test_folders.py::test_23_create_nested_folder_and_go_back_by_breadcrumbs"
+  },
+  {
+    "id": "TC-24",
+    "title": "Folder with a taken name is not created twice",
+    "preconditions": "Signed in. An empty working folder is open in /files/",
+    "steps": [
+      "Create a folder",
+      "Create a folder with the same name again"
+    ],
+    "expected": "A message with \"already exists\" is shown. There is only one folder with that name.",
+    "autotest": "tests/test_folders.py::test_24_folder_with_taken_name_is_not_created_twice"
+  },
+  {
+    "id": "TC-25",
+    "title": "Cancelling folder deletion keeps the folder",
+    "preconditions": "Signed in. An empty working folder is open in /files/",
+    "steps": [
+      "Create a folder",
+      "Click \"Delete\" next to it",
+      "On the confirmation page click \"Cancel\""
+    ],
+    "expected": "The folder is still in the list.",
+    "autotest": "tests/test_folders.py::test_25_cancelling_folder_deletion_keeps_folder"
+  },
+  {
+    "id": "TC-26",
+    "title": "Deleting a folder removes it with its contents",
+    "preconditions": "Signed in. An empty working folder is open in /files/",
+    "steps": [
+      "Create a folder and upload a file into it",
+      "Go back to the working folder and click \"Delete\" next to the new folder",
+      "Click \"Delete\" on the confirmation page"
+    ],
+    "expected": "Step 2: a warning says the folder will be deleted with everything inside. Step 3: \"Deleted: <name>.\" is shown and the folder is gone.",
+    "autotest": "tests/test_folders.py::test_26_deleting_folder_removes_its_contents"
+  },
+  {
+    "id": "TC-27",
+    "title": "Rename a folder",
+    "preconditions": "Signed in. An empty working folder is open in /files/",
+    "steps": [
+      "Create a folder",
+      "Click \"Rename\" next to it",
+      "Enter a new name and click \"Save\""
+    ],
+    "expected": "\"Renamed to <new name>.\" is shown. Only the new name is in the list.",
+    "autotest": "tests/test_folders.py::test_27_rename_folder"
+  },
+  {
+    "id": "TC-28",
+    "title": "Upload a file with a Cyrillic name",
+    "preconditions": "Signed in. An empty working folder is open in /files/",
+    "steps": [
+      "Choose a text file named like \"отчёт.txt\" in \"Upload files\"",
+      "Click \"Upload\""
+    ],
+    "expected": "\"Uploaded files: 1.\" is shown. The file is in the list with the correct name and type \"file\".",
+    "autotest": "tests/test_files.py::test_28_upload_file_with_cyrillic_name"
+  },
+  {
+    "id": "TC-29",
+    "title": "Upload several files at once",
+    "preconditions": "Signed in. An empty working folder is open in /files/",
+    "steps": [
+      "Choose two text files together in \"Upload files\"",
+      "Click \"Upload\""
+    ],
+    "expected": "\"Uploaded files: 2.\" is shown. Both files are in the list.",
+    "autotest": "tests/test_files.py::test_29_upload_several_files_at_once"
+  },
+  {
+    "id": "TC-30",
+    "title": "Download returns the same file",
+    "preconditions": "Signed in. A file with known content is uploaded to the working folder",
+    "steps": [
+      "Click the file name"
+    ],
+    "expected": "The browser downloads a file with the same name and the same content.",
+    "autotest": "tests/test_files.py::test_30_download_returns_same_file"
+  },
+  {
+    "id": "TC-31",
+    "title": "Rename a file",
+    "preconditions": "Signed in. A file is uploaded to the working folder",
+    "steps": [
+      "Click \"Rename\" next to the file",
+      "Enter a new name and click \"Save\""
+    ],
+    "expected": "Only the new name is in the list.",
+    "autotest": "tests/test_files.py::test_31_rename_file"
+  },
+  {
+    "id": "TC-32",
+    "title": "Delete a file after confirmation",
+    "preconditions": "Signed in. A file is uploaded to the working folder",
+    "steps": [
+      "Click \"Delete\" next to the file",
+      "Click \"Delete\" on the confirmation page"
+    ],
+    "expected": "\"Deleted: <name>.\" is shown and the file is gone from the list.",
+    "autotest": "tests/test_files.py::test_32_delete_file_after_confirmation"
+  },
+  {
+    "id": "TC-33",
+    "title": "File one byte over the size limit is rejected",
+    "preconditions": "Signed in. An empty working folder is open in /files/. The size limit is known (5 MB in docker-compose)",
+    "steps": [
+      "Choose a file 1 byte bigger than the limit",
+      "Click \"Upload\""
+    ],
+    "expected": "A message with \"is larger than the allowed\" is shown. The file is not in the list.",
+    "autotest": "tests/test_files.py::test_33_file_over_size_limit_is_rejected"
+  },
+  {
+    "id": "TC-34",
+    "title": "File with a taken name is not overwritten",
+    "preconditions": "Signed in. An empty working folder is open in /files/",
+    "steps": [
+      "Upload same_name.txt with the text \"first version\"",
+      "Upload another same_name.txt with the text \"second version\"",
+      "Download same_name.txt"
+    ],
+    "expected": "Step 2 shows a message with \"already exists\". The downloaded file contains \"first version\".",
+    "autotest": "tests/test_files.py::test_34_file_with_taken_name_is_not_overwritten"
+  },
+  {
+    "id": "TC-35",
+    "title": "Regular user cannot change roles by a direct request",
+    "preconditions": "Signed in as demo_user (no admin role). The roles form is hidden from this user",
+    "steps": [
+      "Send the roles form of demo_user straight to the server (POST /manage/users/<id>/roles/) with the admin role ticked and a valid CSRF token"
+    ],
+    "expected": "The server answers 403 with the page \"403 — access denied\". demo_user still has no admin role.",
+    "autotest": "tests/test_access.py::test_35_regular_user_cannot_change_roles_by_direct_request"
+  },
+  {
+    "id": "TC-36",
+    "title": "Regular user cannot switch a user off by a direct request",
+    "preconditions": "Signed in as demo_user. Another active user exists",
+    "steps": [
+      "Send \"Deactivate\" for that user straight to the server (POST /manage/users/<id>/toggle-active/) with a valid CSRF token"
+    ],
+    "expected": "The server answers 403 with the page \"403 — access denied\". The user is still active.",
+    "autotest": "tests/test_access.py::test_36_regular_user_cannot_deactivate_user_by_direct_request"
+  },
+  {
+    "id": "TC-37",
+    "title": "Admin cannot switch off their own account",
+    "preconditions": "Signed in as demo_admin",
+    "steps": [
+      "Open /manage/ and find demo_admin",
+      "Click \"Deactivate\" in the demo_admin row"
+    ],
+    "expected": "The message \"You cannot switch yourself off.\" is shown. demo_admin stays active.",
+    "autotest": "tests/test_users.py::test_37_admin_cannot_deactivate_themselves"
+  },
+  {
+    "id": "TC-38",
+    "title": "Signed-in user loses access as soon as they are switched off",
+    "preconditions": "A user is signed in in one browser. An admin is signed in in another browser",
+    "steps": [
+      "Admin: click \"Deactivate\" for that user",
+      "User: open the home page /"
+    ],
+    "expected": "The user is sent to /login/?next=/ without signing out by hand.",
+    "autotest": "tests/test_users.py::test_38_deactivated_user_is_signed_out_at_once"
+  },
+  {
+    "id": "TC-39",
+    "title": "Revoking a role is written to the audit log",
+    "preconditions": "Signed in as demo_admin. A user with the \"user\" role exists",
+    "steps": [
+      "Untick \"user\" in the user's roles form and save",
+      "Open /manage/audit/"
+    ],
+    "expected": "The newest record shows: who = demo_admin, action = revoked, role = user, to whom = the user.",
+    "autotest": "tests/test_roles.py::test_39_role_revoke_is_written_to_audit_log"
+  },
+  {
+    "id": "TC-40",
+    "title": "Switching a user off is written to the audit log",
+    "preconditions": "Signed in as demo_admin. An active user exists",
+    "steps": [
+      "Click \"Deactivate\" for the user",
+      "Open /manage/audit/"
+    ],
+    "expected": "The newest record is about this user. Known bug #142: the app does not record this yet; the test is marked xfail.",
+    "autotest": "tests/test_roles.py::test_40_user_deactivation_is_written_to_audit_log"
+  },
+  {
+    "id": "TC-41",
+    "title": "File exactly at the size limit is accepted",
+    "preconditions": "Signed in. An empty working folder is open in /files/. The size limit is known (5 MB in docker-compose)",
+    "steps": [
+      "Choose a file exactly as big as the limit",
+      "Click \"Upload\""
+    ],
+    "expected": "\"Uploaded files: 1.\" is shown and the file is in the list. Together with TC-33 this checks both sides of the limit.",
+    "autotest": "tests/test_files.py::test_41_file_exactly_at_size_limit_is_accepted"
+  },
+  {
+    "id": "TC-42",
+    "title": "Path that climbs out of the storage is refused",
+    "preconditions": "Signed in as demo_user",
+    "steps": [
+      "Open /files/?path=../.."
+    ],
+    "expected": "The server answers 400. No file list is shown.",
+    "autotest": "tests/test_files.py::test_42_path_outside_storage_is_refused"
+  },
+  {
+    "id": "TC-43",
+    "title": "Sign-in does not send the user to another site",
+    "preconditions": "Not signed in",
+    "steps": [
+      "Open /login/?next=https://evil.example/",
+      "Sign in as demo_user"
+    ],
+    "expected": "The home page of the app opens. The address is not evil.example.",
+    "autotest": "tests/test_login.py::test_43_sign_in_does_not_send_user_to_another_site"
+  }
+]
