@@ -22,7 +22,7 @@ What is written by hand: the panel, the access control and the templates.
 | Configuration | `django-environ`, everything from the environment |
 | Tests | pytest + pytest-django, 157 tests, 95% coverage |
 | Lint | ruff + black, run by hand and in CI |
-| E2E | Playwright (chromium), panel and file manager scenarios |
+| E2E | pytest + Playwright (chromium), sign-in, panel and file manager scenarios |
 | CI/CD | GitHub Actions: linters → Django checks → tests → docker compose smoke → image published to GHCR |
 
 ## Quick start
@@ -191,7 +191,7 @@ Written by hand:
 | `files/storage.py` | the storage contract and two implementations: disk and S3 |
 | `files/access.py` | the access rule for the files section |
 | `files/views.py` | listing, upload, rename, delete, download |
-| `e2e/` | Playwright: panel and file manager scenarios in a browser |
+| `e2e/` | pytest + Playwright: sign-in, panel and file manager scenarios in a browser |
 | `deploy/aws/` | Terraform: bucket, IAM role, instance |
 | `templates/` | every template, including `registration/login.html` and 403/404/500 |
 | `config/settings.py` | settings on top of `django-environ` |
@@ -330,56 +330,61 @@ The test environment lives in `config/settings_test.py`; the user fixtures are i
 Pytest checks the backend and the views; Playwright checks that the scenario
 works in a real browser. Neither replaces the other.
 
+The browser tests are written in Python with pytest and
+[pytest-playwright](https://playwright.dev/python/). They have their own
+requirements and their own `e2e/pytest.ini`, so a plain `pytest` still runs
+only the unit tests, and the two never mix.
+
 ```bash
-cd e2e
-npm ci
-npx playwright install chromium
-BASE_URL=http://127.0.0.1:8000 npx playwright test      # against a running stack
-npx playwright show-report                              # the report afterwards
+pip install -r e2e/requirements.txt
+python -m playwright install chromium
+pytest e2e                                  # against a running stack on :8000
+pytest e2e --base-url http://host:port      # against another copy of the app
+pytest e2e --browser firefox --browser webkit
+pytest e2e --headed --slowmo 500            # watch it in a real window
 ```
 
-The app under test is started by the same `docker compose` as usual. The account
-comes from `seed_demo_users` — `demo_admin` with the password above, overridable
-through `E2E_USERNAME` / `E2E_PASSWORD`.
+The app under test is started by the same `docker compose` as usual. The tests
+sign in as the `seed_demo_users` accounts (`demo_admin`, `demo_user`,
+`demo_inactive`) with the password above, overridable through `E2E_PASSWORD`.
+`E2E_MAX_FILE_SIZE` must match the app's `FILE_MANAGER_MAX_FILE_SIZE`
+(5 MB in docker-compose).
 
-Run Playwright **from the `e2e/` directory**. There is no config in the
-repository root, so from there the runner and the specs end up with two
-different instances of `@playwright/test` and every file fails with "did not
-expect test.describe() to be called here". Use `--config e2e/playwright.config.ts`
-if you have to launch it from elsewhere.
+Without Docker, a dev server works too:
+
+```bash
+export DATABASE_URL=sqlite:///e2e.sqlite3 FILE_MANAGER_MAX_FILE_SIZE=5242880 DEBUG=True
+python manage.py migrate && python manage.py seed_groups && python manage.py seed_demo_users --force
+python manage.py runserver 127.0.0.1:8000
+```
 
 ```
 e2e/
-├── playwright.config.ts   baseURL from the environment, retries in CI only,
-│                          trace on-first-retry, video and screenshot on failure
-├── support/
-│   ├── fixtures.ts        login, unique names, the panel and workspace fixtures
-│   ├── panel.page.ts      Page Object of the admin panel
-│   └── file-manager.page.ts   Page Object of the files section
-├── auth.spec.ts           anonymous access, sign-in, moving into the section,
-│                          the identical answer to a wrong password and an
-│                          unknown login
-├── panel.spec.ts          granting and revoking a role, cancelling the form,
-│                          the ban on stripping admin from yourself,
-│                          deactivation, the audit record, the counter on the
-│                          Roles page, creating a user, a weak password
-├── folders.spec.ts        creation, nesting, breadcrumbs, duplicates, deletion
-└── files.spec.ts          upload (one and several), rename, download, delete,
-                           a file over the limit
+├── pytest.ini         base URL, trace/screenshot/video kept for failed tests
+├── requirements.txt   pytest + pytest-playwright
+├── config.py          base URL, demo accounts, size limit (all from env)
+├── conftest.py        signed-in tabs, a fresh user per test, a workspace
+│                      folder per file test, cleanup after each test
+├── helpers.py         unique names, sign-in, sending a form straight to the server
+├── pages/             Page Objects: login, home, users, roles, audit, files
+├── docs/test-cases.md TC-01 … TC-43, the description of every scenario
+└── tests/
+    ├── test_login.py     sign-in, wrong password, unknown and inactive user, sign-out
+    ├── test_access.py    who reaches /manage/ and /files/, forms sent directly
+    ├── test_users.py     search, create, weak password, switching a user off
+    ├── test_roles.py     grant and revoke a role, self-lockout ban, audit log
+    ├── test_folders.py   create, nest, breadcrumbs, duplicates, delete
+    └── test_files.py     upload, rename, download, delete, the size limit
 ```
 
-Every file test works in a folder of its own with a unique name and cleans it up
-afterwards; the panel tests return the demo user to the original set of roles in
-`afterEach` and create new users under unique names. Runs depend neither on each
-other nor on order. There are no timer-based waits: only web-first assertions,
-which wait for the state they need on their own.
+Every file test works in a folder of its own with a unique name and deletes it
+afterwards; role and deactivation tests work on a brand-new user per test.
+Runs depend neither on each other nor on order. Failed tests leave a trace,
+a screenshot and a video in `test-results/` (`playwright show-trace <zip>`).
 
-**About codegen.** Scenario drafts were recorded with `npx playwright codegen`
-and then put in order by hand: locators were replaced with `getByRole`,
-`getByLabel` and `getByTestId`, repeated steps were moved into Page Objects and
-fixtures, and the steps were labelled with `test.step()`. For stable locators a
-few `aria-label`, `role="status"` and `data-testid` attributes were added to the
-templates on purpose — that is more honest than clinging to markup classes.
+TC-40 is marked `xfail`: switching a user off is not written to the audit log
+yet. When that is fixed, pytest reports it as unexpectedly passing and the
+marker must be removed.
 
 The whole project speaks English: interface, comments, test names and docs.
 `LANGUAGE_CODE` is `en-us`, so Django's own messages — login errors, password
@@ -418,12 +423,12 @@ and from the button (`workflow_dispatch`). Six jobs:
 | **Django checks** | `manage.py check`, `makemigrations --check` (forgotten migrations), `check --deploy --fail-level WARNING` with the HTTPS flags on |
 | **Tests** | a matrix of Python 3.12 and 3.13, a real PostgreSQL 16 service container, `pytest --cov --cov-fail-under=90`, coverage report in the artifacts |
 | **docker compose up** | starts the stack the way production does and checks the 302 for anonymous visitors on `/manage/` and `/files/`, an admin sign-in, and that the roles are seeded |
-| **E2E (Playwright)** | starts the same stack, installs chromium, runs the panel and file manager scenarios, and on failure keeps the Playwright report as an artifact |
+| **E2E (Playwright)** | starts the same stack, installs chromium, runs `pytest e2e` against local storage and S3, and on failure keeps traces, screenshots and videos as an artifact |
 | **Publish to GHCR** | waits for a green smoke and E2E; for `main` and `v*` tags only: builds the image and pushes it to `ghcr.io/<owner>/<repo>` with the `latest`, `sha-…` and semver tags. Uses the built-in `GITHUB_TOKEN`, so no secrets to configure |
 
 CD goes as far as publishing the image: after that, `docker compose pull &&
 docker compose up -d` with that image is enough on your own server. Dependency
-updates come from `.github/dependabot.yml` (pip, npm, GitHub Actions, Docker and
+updates come from `.github/dependabot.yml` (pip for the app and for e2e, GitHub Actions, Docker and
 docker-compose, weekly).
 
 ## PostgreSQL instead of SQLite
@@ -603,7 +608,7 @@ files/            the file manager at /files/
   storage.py        the storage contract plus local and s3
   access.py         who gets into the section
   views.py          listing, upload, rename, delete, download
-e2e/              Playwright: scenarios in a browser
+e2e/              pytest + Playwright: scenarios in a browser
 deploy/aws/       Terraform: S3, IAM role, EC2
 templates/        base.html, registration/login.html, the panel, 403/404/500
 static/css/       the single css file

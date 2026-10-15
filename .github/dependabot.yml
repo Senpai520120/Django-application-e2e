@@ -10,9 +10,8 @@ updates:
       python-deps:
         patterns: ["*"]
 
-  # Browser tests. Playwright ships often, and the package version must
-  # match the browser version CI installs.
-  - package-ecosystem: npm
+  # Browser tests (pytest + Playwright) keep their own requirements file.
+  - package-ecosystem: pip
     directory: "/e2e"
     schedule:
       interval: weekly

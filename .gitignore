@@ -20,3 +20,6 @@ htmlcov/
 .ruff_cache/
 .idea/
 .vscode/
+
+# Playwright artifacts of failed e2e tests
+test-results/
