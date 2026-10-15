@@ -32,3 +32,9 @@ variable "key_name" {
   type        = string
   default     = ""
 }
+
+variable "seed_demo_users" {
+  description = "Create the demo_* accounts with their published password. Only for a short-lived demo: the stand is reachable from the internet over plain HTTP"
+  type        = bool
+  default     = false
+}

@@ -530,7 +530,7 @@ here as a record of what was checked.
 | | |
 | --- | --- |
 | Address | http://100.54.108.163/ (decommissioned) |
-| Account for a look around | `demo_admin` / `demo-password-123` |
+| Account for a look around | `demo_admin` / `demo-password-123` (the stand ran with `seed_demo_users=true`) |
 | Region | `us-east-1` |
 | Bucket | `users-and-roles-files-f92fa1c9` |
 | Image | `ghcr.io/senpai520120/django_application:0.2.0` |
@@ -542,6 +542,13 @@ cd deploy/aws
 terraform init
 terraform apply   -var region=us-east-1   -var bucket_name=your-globally-unique-bucket   -var key_name=your-key-pair-name   -var ssh_cidr=your.ip.address/32   -var image=ghcr.io/senpai520120/django_application:0.2.0
 ```
+
+The `demo_*` accounts share a password published in this README, so they are
+**not** created by default: the stand is reachable from the internet over plain
+HTTP. Sign in with your own administrator instead
+(`docker compose exec web python manage.py createsuperuser` over SSH), or add
+`-var seed_demo_users=true` for a short-lived demo and destroy the stand
+afterwards.
 
 A key pair belongs to a region, so deploy into the same region where it was
 created. The `terraform.tfstate` file holds the generated `SECRET_KEY` and the

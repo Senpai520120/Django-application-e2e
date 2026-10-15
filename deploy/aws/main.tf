@@ -170,11 +170,12 @@ resource "aws_instance" "app" {
   user_data_replace_on_change = true
 
   user_data = templatefile("${path.module}/user_data.sh.tftpl", {
-    image       = var.image
-    bucket      = aws_s3_bucket.files.bucket
-    region      = var.region
-    secret_key  = random_password.secret_key.result
-    db_password = random_password.db_password.result
+    image           = var.image
+    bucket          = aws_s3_bucket.files.bucket
+    region          = var.region
+    secret_key      = random_password.secret_key.result
+    db_password     = random_password.db_password.result
+    seed_demo_users = var.seed_demo_users
   })
 
   tags = merge(local.tags, { Name = "${local.name}-app" })
