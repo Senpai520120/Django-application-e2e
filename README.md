@@ -242,10 +242,13 @@ files/storage.py
 └── S3FileStorage        on top of S3Storage from django-storages
 ```
 
-The backend is chosen by `get_storage()` from `FILE_STORAGE_BACKEND`, which also
-sets `STORAGES["default"]` in the settings — the same way `DATABASE_URL` picks a
-database. A third backend is added as a new subclass: views and templates stay
-as they are.
+The backend lives in `STORAGES["filemanager"]` in the settings, next to
+`STORAGES["default"]`, and Django's own storage registry builds it;
+`get_storage()` only fetches it. `FILE_STORAGE_BACKEND` fills it in the same
+way `DATABASE_URL` picks a database: `local`, `s3`, or the dotted path of any
+other `FileManagerStorage` subclass. A third backend is therefore one new
+class plus `FILE_STORAGE_BACKEND=yourapp.storage.YourStorage`: `files/storage.py`,
+the views and the templates stay as they are.
 
 Folders in S3 are virtual: an empty folder is a zero-length object whose key
 ends with `/`. Deleting a folder removes every key under its prefix; renaming
@@ -276,9 +279,10 @@ docker compose --profile s3 up --build
 | Path traversal | `files/paths.py`: `..`, absolute paths, drive letters and null bytes are rejected before the storage is touched, and the answer is 400 |
 | Symlink leading out | the local storage additionally compares the already resolved path with the root |
 | File names | separators, control characters and names reserved by Windows are forbidden, and length is capped at 120 characters |
-| Size | a per-file limit and a total-storage limit, both from the environment |
+| Size | a per-file limit enforced while the file arrives: `files/uploads.py` stops reading a file once it passes the limit, so an oversized upload never reaches the disk. A total-storage limit is checked before saving; it is a soft limit (no lock), so uploads at the very same moment can overshoot it by one batch each. Both come from the environment |
 | Dangerous extensions | a download always carries `Content-Disposition: attachment` plus `X-Content-Type-Options: nosniff`, so the browser never executes an `.html` or an `.svg` |
 | Overwriting | a file with an existing name is not silently overwritten but answered with an error |
+| Forged parent | a new file or folder goes only into an existing folder; `notes.txt/new` is refused the same way by both backends |
 | Secrets | AWS keys live only in `.env` and in the IAM role; the repository holds none |
 
 Every line above is covered by tests: `tests/test_files_paths.py`,
@@ -287,7 +291,7 @@ Every line above is covered by tests: `tests/test_files_paths.py`,
 ## Tests
 
 ```bash
-pytest                                  # 157 tests
+pytest                                  # 167 tests
 pytest -v
 pytest --cov --cov-report=term-missing  # coverage (95% right now)
 ```

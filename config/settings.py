@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import environ
+from django.conf import global_settings
 from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -162,8 +163,16 @@ STORAGES = {
 
 FILE_MANAGER = {
     "MAX_FILE_SIZE": env("FILE_MANAGER_MAX_FILE_SIZE"),
+    # A soft limit: checked before saving, without a lock, so uploads running
+    # at the same moment can pass it together by at most one batch each.
     "MAX_TOTAL_SIZE": env("FILE_MANAGER_MAX_TOTAL_SIZE"),
 }
+
+# The size limit is enforced while a file arrives, before it reaches the disk.
+FILE_UPLOAD_HANDLERS = [
+    "files.uploads.SizeLimitUploadHandler",
+    *global_settings.FILE_UPLOAD_HANDLERS,
+]
 
 # Read by django-storages. Keys are never stored in code: either the environment
 # or the instance IAM role when the variables are left unset.

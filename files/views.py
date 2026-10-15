@@ -22,6 +22,7 @@ from files.access import FileManagerAccessMixin
 from files.forms import FolderForm, RenameForm, UploadForm
 from files.paths import breadcrumbs, join_path, normalize_path, parent_path
 from files.storage import StorageError, get_storage
+from files.uploads import oversized_uploads
 
 
 def browse_url(path: str = "") -> str:
@@ -97,6 +98,12 @@ class FolderCreateView(FileManagerMixin, FormView):
 
 class UploadView(FileManagerMixin, FormView):
     form_class = UploadForm
+
+    def get_form_kwargs(self):
+        # super() reads request.FILES, and parsing it fills oversized_uploads.
+        kwargs = super().get_form_kwargs()
+        kwargs["oversized"] = oversized_uploads(self.request)
+        return kwargs
 
     def form_valid(self, form):
         path = form.cleaned_data["path"]
