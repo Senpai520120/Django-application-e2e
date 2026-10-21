@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+
+{% block title %}Sign-in failed — Users &amp; Roles{% endblock %}
+
+{% block content %}
+  <h1>Sign-in failed</h1>
+  <p>The app did not let this account in. It may be switched off: ask an administrator.</p>
+  {% if sso_logout_url %}
+    <p><a href="{{ sso_logout_url }}">Sign in with another account</a></p>
+  {% else %}
+    <p><a href="{% url 'login' %}">Back to sign in</a></p>
+  {% endif %}
+{% endblock %}

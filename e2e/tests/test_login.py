@@ -5,11 +5,13 @@ import re
 from playwright.sync_api import Page, expect
 
 import config
+from helpers import local_sign_in_only
 from pages.files_page import FilesPage
 from pages.home_page import HomePage
 from pages.login_page import LoginPage
 
 
+@local_sign_in_only
 def test_01_anonymous_user_is_sent_to_sign_in(page: Page):
     """TC-01: an anonymous user who opens the home page is sent to sign in."""
     page.goto("/")
@@ -18,6 +20,7 @@ def test_01_anonymous_user_is_sent_to_sign_in(page: Page):
     expect(LoginPage(page).heading).to_be_visible()
 
 
+@local_sign_in_only
 def test_02_user_signs_in_with_valid_credentials(page: Page):
     """TC-02: a user signs in and sees their name and role."""
     login_page = LoginPage(page).open()
@@ -29,6 +32,7 @@ def test_02_user_signs_in_with_valid_credentials(page: Page):
     expect(home_page.role_badge("user")).to_be_visible()
 
 
+@local_sign_in_only
 def test_03_wrong_password_is_rejected(page: Page):
     """TC-03: sign-in with a wrong password shows an error."""
     login_page = LoginPage(page).open()
@@ -39,6 +43,7 @@ def test_03_wrong_password_is_rejected(page: Page):
     expect(page).to_have_url(re.compile(r"/login/$"))
 
 
+@local_sign_in_only
 def test_04_unknown_username_gets_the_same_error(page: Page):
     """TC-04: an unknown username gets the same error as a wrong password.
 
@@ -57,6 +62,7 @@ def test_04_unknown_username_gets_the_same_error(page: Page):
     assert error_for_unknown_user == error_for_wrong_password
 
 
+@local_sign_in_only
 def test_05_deactivated_user_cannot_sign_in(page: Page):
     """TC-05: a switched-off user cannot sign in."""
     login_page = LoginPage(page).open()
@@ -67,6 +73,7 @@ def test_05_deactivated_user_cannot_sign_in(page: Page):
     expect(page).to_have_url(re.compile(r"/login/$"))
 
 
+@local_sign_in_only
 def test_06_user_signs_out(user_page: Page):
     """TC-06: after signing out the home page asks to sign in again."""
     home_page = HomePage(user_page).open()
@@ -87,6 +94,7 @@ def test_07_header_link_opens_file_manager(user_page: Page):
     expect(FilesPage(user_page).heading).to_be_visible()
 
 
+@local_sign_in_only
 def test_43_sign_in_does_not_send_user_to_another_site(page: Page):
     """TC-43: a link with ?next= pointing to another site does not take the user there.
 

@@ -1,0 +1,84 @@
+{
+  "realm": "myapp",
+  "enabled": true,
+  "loginWithEmailAllowed": false,
+  "editUsernameAllowed": false,
+  "clients": [
+    {
+      "clientId": "django-app",
+      "name": "Users & Roles",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "dev-only-secret",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "redirectUris": [
+        "http://localhost:8000/oidc/callback/",
+        "http://127.0.0.1:8000/oidc/callback/"
+      ],
+      "webOrigins": ["+"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:8000/*##http://127.0.0.1:8000/*"
+      }
+    }
+  ],
+  "users": [
+    {
+      "username": "demo_admin",
+      "enabled": true,
+      "email": "demo_admin@example.com",
+      "emailVerified": true,
+      "firstName": "Alice",
+      "lastName": "Adminson",
+      "credentials": [{ "type": "password", "value": "demo-password-123", "temporary": false }]
+    },
+    {
+      "username": "demo_user",
+      "enabled": true,
+      "email": "demo_user@example.com",
+      "emailVerified": true,
+      "firstName": "John",
+      "lastName": "Smith",
+      "credentials": [{ "type": "password", "value": "demo-password-123", "temporary": false }]
+    },
+    {
+      "username": "demo_inactive",
+      "enabled": true,
+      "email": "demo_inactive@example.com",
+      "emailVerified": true,
+      "firstName": "Peter",
+      "lastName": "Inactive",
+      "credentials": [{ "type": "password", "value": "demo-password-123", "temporary": false }]
+    },
+    {
+      "username": "kc_disabled",
+      "enabled": false,
+      "email": "kc_disabled@example.com",
+      "emailVerified": true,
+      "firstName": "Dora",
+      "lastName": "Disabled",
+      "credentials": [{ "type": "password", "value": "demo-password-123", "temporary": false }]
+    },
+    {
+      "username": "kc_newcomer",
+      "enabled": true,
+      "email": "kc_newcomer@example.com",
+      "emailVerified": true,
+      "firstName": "Nina",
+      "lastName": "Newcomer",
+      "credentials": [{ "type": "password", "value": "demo-password-123", "temporary": false }]
+    },
+    {
+      "username": "kc_promoted",
+      "enabled": true,
+      "email": "kc_promoted@example.com",
+      "emailVerified": true,
+      "firstName": "Paul",
+      "lastName": "Promoted",
+      "credentials": [{ "type": "password", "value": "demo-password-123", "temporary": false }]
+    }
+  ]
+}

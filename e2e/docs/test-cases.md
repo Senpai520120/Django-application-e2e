@@ -573,3 +573,111 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 **Expected result:** The home page of the app opens. The address is not evil.example.
 
 **Automated test:** `tests/test_login.py::test_43_sign_in_does_not_send_user_to_another_site`
+
+## TC-44. Anonymous user is sent to Keycloak and comes back
+
+**Preconditions:** SSO stack (docker-compose.sso.yml). Not signed in
+
+**Steps:**
+
+1. Open /files/
+2. Sign in to Keycloak as demo_admin
+
+**Expected result:** The Keycloak sign-in form opens first. After it the app opens /files/.
+
+**Automated test:** `tests/test_sso.py::test_44_anonymous_user_is_sent_to_keycloak_and_back`
+
+## TC-45. Keycloak session signs in to the app (SSO)
+
+**Preconditions:** SSO stack (docker-compose.sso.yml). Not signed in
+
+**Steps:**
+
+1. Open the Keycloak account page /realms/myapp/account
+2. Sign in as demo_user
+3. Open the app's home page /
+
+**Expected result:** The home page shows "You are signed in as demo_user" without a second sign-in form.
+
+**Automated test:** `tests/test_sso.py::test_45_keycloak_session_signs_in_to_the_app`
+
+## TC-46. Signing out of the app ends the Keycloak session
+
+**Preconditions:** SSO stack (docker-compose.sso.yml). Signed in as demo_user
+
+**Steps:**
+
+1. Click "Sign out"
+2. Open the Keycloak account page
+3. Open the app's home page /
+
+**Expected result:** Both the Keycloak account page and the app ask to sign in again.
+
+**Automated test:** `tests/test_sso.py::test_46_sign_out_ends_the_keycloak_session`
+
+## TC-47. Keycloak rejects a wrong password
+
+**Preconditions:** SSO stack (docker-compose.sso.yml). Not signed in
+
+**Steps:**
+
+1. Open /
+2. Enter demo_user and wrong-password in the Keycloak form
+
+**Expected result:** Keycloak shows "Invalid username or password." The app does not open.
+
+**Automated test:** `tests/test_sso.py::test_47_wrong_password_is_rejected_by_keycloak`
+
+## TC-48. Account switched off in Keycloak cannot sign in
+
+**Preconditions:** SSO stack (docker-compose.sso.yml). kc_disabled is disabled in Keycloak
+
+**Steps:**
+
+1. Open /
+2. Sign in to Keycloak as kc_disabled
+
+**Expected result:** Keycloak says the account is disabled. The app does not open.
+
+**Automated test:** `tests/test_sso.py::test_48_account_disabled_in_keycloak_cannot_sign_in`
+
+## TC-49. User switched off in the panel cannot sign in through Keycloak
+
+**Preconditions:** SSO stack (docker-compose.sso.yml). demo_inactive is enabled in Keycloak and switched off in the app
+
+**Steps:**
+
+1. Open /
+2. Sign in to Keycloak as demo_inactive
+3. Open / again
+
+**Expected result:** Both times the app shows "Sign-in failed" at /login/failed/, with no redirect loop.
+
+**Automated test:** `tests/test_sso.py::test_49_user_switched_off_in_the_panel_cannot_sign_in`
+
+## TC-50. New Keycloak user gets the "user" role
+
+**Preconditions:** SSO stack (docker-compose.sso.yml). kc_newcomer exists only in Keycloak
+
+**Steps:**
+
+1. Sign in as kc_newcomer
+2. Open /manage/
+
+**Expected result:** The home page lists the role "user". /manage/ answers 403.
+
+**Automated test:** `tests/test_sso.py::test_50_new_keycloak_user_gets_the_user_role`
+
+## TC-51. Role given in the panel survives the next sign-in
+
+**Preconditions:** SSO stack (docker-compose.sso.yml). kc_promoted has signed in once
+
+**Steps:**
+
+1. As admin, give kc_promoted the admin role in the panel
+2. kc_promoted signs out and signs in through Keycloak again
+3. Open /manage/
+
+**Expected result:** The home page lists the role "admin". /manage/ opens.
+
+**Automated test:** `tests/test_sso.py::test_51_role_given_in_the_panel_survives_the_next_sign_in`

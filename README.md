@@ -329,6 +329,46 @@ What is covered:
 The test environment lives in `config/settings_test.py`; the user fixtures are in
 `tests/conftest.py`.
 
+## Sign-in through Keycloak (SSO)
+
+Off by default. `docker-compose.sso.yml` adds Keycloak with the realm from
+`keycloak/realm-myapp.json` and turns `OIDC_ENABLED` on:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.sso.yml up -d --build --wait
+```
+
+Then `/login/` leads to the Keycloak form at `localhost:8080`, and signing in
+there signs in to every app of the realm (the account page
+`http://localhost:8080/realms/myapp/account` opens without a second form).
+"Sign out" ends the Keycloak session too. Keycloak admin console:
+`http://localhost:8080/admin`, `admin` / `admin`.
+
+**Who decides what.** Keycloak answers "who you are": password, disabled
+accounts, the shared session. The app keeps "what you may do": roles are still
+given in `/manage/` and written to the audit log, and a user switched off in
+the panel stays out even with a valid Keycloak password (they land on
+`/login/failed/`). A user who exists only in Keycloak gets the `user` role on
+the first sign-in. Users are matched by username (`preferred_username`), so
+`demo_*` accounts are the same people on both sides.
+
+Accounts in the realm, all with the password `demo-password-123`:
+
+| Username | In Keycloak | In the app |
+| --- | --- | --- |
+| `demo_admin`, `demo_user` | enabled | as in [Demo users](#demo-users) |
+| `demo_inactive` | enabled | switched off: Keycloak lets in, the app does not |
+| `kc_disabled` | disabled | — |
+| `kc_newcomer`, `kc_promoted` | enabled | appear on the first sign-in |
+
+The secret `dev-only-secret` is for local runs only. The app talks to Keycloak
+at two addresses (`OIDC_BROWSER_URL` for the browser, `OIDC_BACKEND_URL` from
+inside docker); outside docker both are the same and only the first is needed.
+
+E2E in this mode: `E2E_AUTH=keycloak pytest e2e`. The fixtures sign in through
+the Keycloak form, tests of the app's own form are skipped, and
+`e2e/tests/test_sso.py` runs (TC-44…51).
+
 ## E2E tests (Playwright)
 
 Pytest checks the backend and the views; Playwright checks that the scenario

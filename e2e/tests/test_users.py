@@ -5,7 +5,7 @@ import re
 from playwright.sync_api import Page, expect
 
 import config
-from helpers import sign_in, unique_name
+from helpers import panel_user_signs_in, sign_in, unique_name
 from pages.home_page import HomePage
 from pages.login_page import LoginPage
 from pages.user_create_page import UserCreatePage
@@ -35,6 +35,7 @@ def test_13_admin_creates_user(admin_page: Page, username_to_create):
     expect(users_page.row(username)).to_be_visible()
 
 
+@panel_user_signs_in
 def test_14_new_user_can_sign_in(page: Page, new_user):
     """TC-14: a user created by an admin can sign in with their password."""
     login_page = LoginPage(page).open()
@@ -59,6 +60,7 @@ def test_15_numeric_password_is_rejected(admin_page: Page):
     expect(users_page.nothing_found).to_be_visible()
 
 
+@panel_user_signs_in
 def test_16_deactivated_user_cannot_sign_in(admin_page: Page, new_user, new_context):
     """TC-16: an admin switches a user off and that user can no longer sign in."""
     users_page = UsersPage(admin_page).open()
@@ -89,6 +91,7 @@ def test_37_admin_cannot_deactivate_themselves(admin_page: Page):
     expect(users_page.deactivate_button(config.ADMIN.username)).to_be_visible()
 
 
+@panel_user_signs_in
 def test_38_deactivated_user_is_signed_out_at_once(
     page: Page, new_user, admin_browser: Page
 ):
