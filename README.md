@@ -349,8 +349,27 @@ accounts, the shared session. The app keeps "what you may do": roles are still
 given in `/manage/` and written to the audit log, and a user switched off in
 the panel stays out even with a valid Keycloak password (they land on
 `/login/failed/`). A user who exists only in Keycloak gets the `user` role on
-the first sign-in. Users are matched by username (`preferred_username`), so
-`demo_*` accounts are the same people on both sides.
+the first sign-in.
+
+**How a Keycloak account finds its Django user.** By Keycloak's permanent id
+(`sub`), kept in `accounts.KeycloakIdentity`, so renaming an account in
+Keycloak changes nothing in the app. On the very first sign-in an existing
+Django user with the same username (case aside) is linked, which is how the
+`demo_*` accounts become the same people on both sides. Never linked by name:
+a user already linked to another Keycloak account, and anybody with admin
+rights (the `admin` role, staff, superusers), since whoever first signed in
+under that name would get those rights. Admins are linked by hand with the
+Keycloak account id (the "ID" on the user's page in the Keycloak console):
+
+```bash
+python manage.py link_keycloak_user olga=2b0f5c1e-...           # several pairs allowed
+python manage.py link_keycloak_user --replace olga=<new id>     # account recreated in Keycloak
+```
+
+In docker the same runs on start from `KEYCLOAK_LINKS`; that is how
+`demo_admin` (its id is fixed in the realm file) is linked. With SSO on there
+are no local passwords at all, the `/admin/` form included: Keycloak is the
+only way in, and a user switched off in the panel loses their session at once.
 
 Accounts in the realm, all with the password `demo-password-123`:
 

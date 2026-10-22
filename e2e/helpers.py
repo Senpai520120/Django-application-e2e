@@ -43,6 +43,8 @@ def sign_in(page: Page, user: User) -> Page:
         page.wait_for_url(
             lambda url: not url.startswith(config.KEYCLOAK_URL) and "/oidc/" not in url
         )
+        # The app refused the account: say so here, not as a timeout later.
+        assert "/login/failed/" not in page.url, f"the app refused {user.username}"
         return page
 
     LoginPage(page).open().sign_in(user.username, user.password)

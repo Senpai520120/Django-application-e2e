@@ -106,10 +106,9 @@ LOGOUT_REDIRECT_URL = "login"
 OIDC_ENABLED = env.bool("OIDC_ENABLED", default=False)
 if OIDC_ENABLED:
     INSTALLED_APPS.append("mozilla_django_oidc")
-    AUTHENTICATION_BACKENDS = [
-        "accounts.oidc.KeycloakBackend",
-        "django.contrib.auth.backends.ModelBackend",
-    ]
+    # Keycloak is the only way in: without ModelBackend a local password
+    # (at /admin/login/, say) cannot get around a user disabled in Keycloak.
+    AUTHENTICATION_BACKENDS = ["accounts.oidc.KeycloakBackend"]
     # Two addresses of the same realm: the browser reaches Keycloak at
     # localhost:8080, the app inside docker at keycloak:8080.
     _browser = env("OIDC_BROWSER_URL") + "/protocol/openid-connect"
@@ -129,6 +128,10 @@ if OIDC_ENABLED:
     # The id token goes back to Keycloak on sign-out as id_token_hint.
     OIDC_STORE_ID_TOKEN = True
     OIDC_OP_LOGOUT_URL_METHOD = "accounts.oidc.keycloak_logout_url"
+    # Where Keycloak sends the browser after sign-out. Empty: the app's own
+    # address as the request saw it, which behind a proxy needs
+    # USE_X_FORWARDED_PROTO to come out as https.
+    OIDC_POST_LOGOUT_REDIRECT_URL = env("OIDC_POST_LOGOUT_REDIRECT_URL", default="")
     LOGIN_URL = "oidc_authentication_init"
     # Not "/": that page needs a signed-in user, so a refused user would go
     # to Keycloak, which still remembers them, and back here in a loop.

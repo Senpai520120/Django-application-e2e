@@ -13,5 +13,12 @@ if [ "${SEED_DEMO_USERS:-0}" = "1" ]; then
     python manage.py seed_demo_users --force
 fi
 
+# Admins are not linked to Keycloak by username on sign-in; see
+# accounts/management/commands/link_keycloak_user.py.
+if [ -n "${KEYCLOAK_LINKS:-}" ]; then
+    echo "==> Keycloak links (KEYCLOAK_LINKS)"
+    python manage.py link_keycloak_user --replace $KEYCLOAK_LINKS
+fi
+
 echo "==> Starting: $*"
 exec "$@"

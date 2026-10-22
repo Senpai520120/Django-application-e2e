@@ -27,6 +27,7 @@
   ],
   "users": [
     {
+      "id": "00000000-0000-4000-8000-00000000a001",
       "username": "demo_admin",
       "enabled": true,
       "email": "demo_admin@example.com",

@@ -41,6 +41,9 @@ services:
       OIDC_RP_CLIENT_SECRET: dev-only-secret
       OIDC_BROWSER_URL: http://localhost:8080/realms/myapp
       OIDC_BACKEND_URL: http://keycloak:8080/realms/myapp
+      # demo_admin is an admin, so it is linked by its Keycloak id (fixed in
+      # the realm file), never by username. Space-separated username=id pairs.
+      KEYCLOAK_LINKS: demo_admin=00000000-0000-4000-8000-00000000a001
     healthcheck:
       # /login/ now redirects to localhost:8080, which is not Keycloak inside
       # this container. This page is public and answers 200 by itself.
