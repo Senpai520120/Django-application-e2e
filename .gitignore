@@ -21,5 +21,12 @@ htmlcov/
 .idea/
 .vscode/
 
+# Terraform state holds SECRET_KEY and the database password.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+crash.log
+
 # Playwright artifacts of failed e2e tests
 test-results/
