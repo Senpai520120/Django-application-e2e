@@ -112,8 +112,11 @@ if OIDC_ENABLED:
     # Two addresses of the same realm: the browser reaches Keycloak at
     # localhost:8080, the app inside docker at keycloak:8080.
     _browser = env("OIDC_BROWSER_URL") + "/protocol/openid-connect"
-    _backend = env("OIDC_BACKEND_URL", default=env("OIDC_BROWSER_URL"))
-    _backend += "/protocol/openid-connect"
+    _realm_url = env("OIDC_BACKEND_URL", default=env("OIDC_BROWSER_URL"))
+    _backend = _realm_url + "/protocol/openid-connect"
+    # The Admin API of the same realm: http://host/realms/x -> http://host/admin/realms/x.
+    # The panel creates users there through the client's service account.
+    OIDC_ADMIN_URL = _realm_url.replace("/realms/", "/admin/realms/", 1)
 
     OIDC_RP_CLIENT_ID = env("OIDC_RP_CLIENT_ID")
     OIDC_RP_CLIENT_SECRET = env("OIDC_RP_CLIENT_SECRET")

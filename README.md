@@ -367,7 +367,21 @@ python manage.py link_keycloak_user --replace olga=<new id>     # account recrea
 ```
 
 In docker the same runs on start from `KEYCLOAK_LINKS`; that is how
-`demo_admin` (its id is fixed in the realm file) is linked. With SSO on there
+`demo_admin` (its id is fixed in the realm file) is linked.
+
+**Users made in the app get Keycloak accounts.** With SSO on, "New user" in
+`/manage/` creates the Keycloak account too, with the same password; if
+Keycloak is down or already has that username, nobody is created and the form
+says why. Users made while SSO was off get their accounts on the next start
+in SSO mode (`manage.py push_users_to_keycloak`, run by the entrypoint), and
+sign in with their old password. This works because Keycloak accepts Django's
+`pbkdf2_sha256` password hashes as they are: the app never sees or sends a
+plain password. The app calls Keycloak's Admin API as the service account of
+its `django-app` client, which may only view and manage users. Email and name
+are optional in the realm, as in the panel.
+
+Not synced: a password changed in Django later, and switching a user off
+(the app refuses them anyway). Keycloak keeps its own copy from then on. With SSO on there
 are no local passwords at all, the `/admin/` form included: Keycloak is the
 only way in, and a user switched off in the panel loses their session at once.
 

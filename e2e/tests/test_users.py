@@ -5,8 +5,9 @@ import re
 from playwright.sync_api import Page, expect
 
 import config
-from helpers import panel_user_signs_in, sign_in, unique_name
+from helpers import sign_in, unique_name
 from pages.home_page import HomePage
+from pages.keycloak_login_page import KeycloakLoginPage
 from pages.login_page import LoginPage
 from pages.user_create_page import UserCreatePage
 from pages.users_page import UsersPage
@@ -35,12 +36,12 @@ def test_13_admin_creates_user(admin_page: Page, username_to_create):
     expect(users_page.row(username)).to_be_visible()
 
 
-@panel_user_signs_in
 def test_14_new_user_can_sign_in(page: Page, new_user):
-    """TC-14: a user created by an admin can sign in with their password."""
-    login_page = LoginPage(page).open()
+    """TC-14: a user created by an admin can sign in with their password.
 
-    login_page.sign_in(new_user.username, new_user.password)
+    With SSO the panel also creates the Keycloak account, password included.
+    """
+    sign_in(page, new_user)
 
     expect(HomePage(page).heading).to_have_text(
         f"You are signed in as {new_user.username}"
@@ -60,7 +61,6 @@ def test_15_numeric_password_is_rejected(admin_page: Page):
     expect(users_page.nothing_found).to_be_visible()
 
 
-@panel_user_signs_in
 def test_16_deactivated_user_cannot_sign_in(admin_page: Page, new_user, new_context):
     """TC-16: an admin switches a user off and that user can no longer sign in."""
     users_page = UsersPage(admin_page).open()
@@ -75,9 +75,15 @@ def test_16_deactivated_user_cannot_sign_in(admin_page: Page, new_user, new_cont
 
     # Try to sign in as that user in a separate browser.
     other_browser = new_context().new_page()
-    login_page = LoginPage(other_browser).open()
-    login_page.sign_in(new_user.username, new_user.password)
-    expect(login_page.error_message).to_be_visible()
+    if config.SSO:
+        # Keycloak knows the password; the app refuses the switched-off user.
+        other_browser.goto("/login/")
+        KeycloakLoginPage(other_browser).sign_in(new_user.username, new_user.password)
+        expect(other_browser).to_have_url(re.compile(r"/login/failed/$"))
+    else:
+        login_page = LoginPage(other_browser).open()
+        login_page.sign_in(new_user.username, new_user.password)
+        expect(login_page.error_message).to_be_visible()
 
 
 def test_37_admin_cannot_deactivate_themselves(admin_page: Page):
@@ -91,7 +97,6 @@ def test_37_admin_cannot_deactivate_themselves(admin_page: Page):
     expect(users_page.deactivate_button(config.ADMIN.username)).to_be_visible()
 
 
-@panel_user_signs_in
 def test_38_deactivated_user_is_signed_out_at_once(
     page: Page, new_user, admin_browser: Page
 ):
@@ -104,4 +109,8 @@ def test_38_deactivated_user_is_signed_out_at_once(
     users_page.deactivate(new_user.username)
 
     page.goto("/")
-    expect(page).to_have_url(re.compile(r"/login/\?next=/$"))
+    if config.SSO:
+        # Back through Keycloak, which still remembers them, to the refusal.
+        expect(page).to_have_url(re.compile(r"/login/failed/$"))
+    else:
+        expect(page).to_have_url(re.compile(r"/login/\?next=/$"))

@@ -30,3 +30,6 @@ crash.log
 
 # Playwright artifacts of failed e2e tests
 test-results/
+
+# Playwright storage state (codegen --save-storage): session cookies
+auth.json

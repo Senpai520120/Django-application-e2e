@@ -20,5 +20,14 @@ if [ -n "${KEYCLOAK_LINKS:-}" ]; then
     python manage.py link_keycloak_user --replace $KEYCLOAK_LINKS
 fi
 
+# Users made while SSO was off get Keycloak accounts with their own password.
+if [ "${OIDC_ENABLED:-False}" = "True" ]; then
+    echo "==> Users without a Keycloak account"
+    # Not fatal: without Keycloak the app still starts, and the next start
+    # pushes whoever is left.
+    python manage.py push_users_to_keycloak ||
+        echo "WARNING: users were not pushed to Keycloak; they will be on the next start"
+fi
+
 echo "==> Starting: $*"
 exec "$@"

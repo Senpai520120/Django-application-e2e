@@ -15,9 +15,6 @@ from pages.login_page import LoginPage
 local_sign_in_only = pytest.mark.skipif(
     config.SSO, reason="checks the app's own sign-in form, not used with SSO"
 )
-panel_user_signs_in = pytest.mark.skipif(
-    config.SSO, reason="a user created in the panel has no Keycloak account"
-)
 
 
 def unique_name(prefix: str) -> str:
