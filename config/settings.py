@@ -109,6 +109,12 @@ if OIDC_ENABLED:
     # Keycloak is the only way in: without ModelBackend a local password
     # (at /admin/login/, say) cannot get around a user disabled in Keycloak.
     AUTHENTICATION_BACKENDS = ["accounts.oidc.KeycloakBackend"]
+    # A signed-in user is asked about again, silently, once the id token
+    # expires: someone disabled in Keycloak since is signed out then.
+    MIDDLEWARE.append("mozilla_django_oidc.middleware.SessionRefresh")
+    OIDC_RENEW_ID_TOKEN_EXPIRY_SECONDS = env.int(
+        "OIDC_RENEW_ID_TOKEN_EXPIRY_SECONDS", default=15 * 60
+    )
     # Two addresses of the same realm: the browser reaches Keycloak at
     # localhost:8080, the app inside docker at keycloak:8080.
     _browser = env("OIDC_BROWSER_URL") + "/protocol/openid-connect"
@@ -117,6 +123,12 @@ if OIDC_ENABLED:
     # The Admin API of the same realm: http://host/realms/x -> http://host/admin/realms/x.
     # The panel creates users there through the client's service account.
     OIDC_ADMIN_URL = _realm_url.replace("/realms/", "/admin/realms/", 1)
+    # A link whose Keycloak account is gone: make the account again (on for
+    # the development Keycloak, which forgets everything on `down`) or only
+    # report it (off: in production a missing account was deleted on purpose).
+    KEYCLOAK_REMAKE_LOST_ACCOUNTS = env.bool(
+        "KEYCLOAK_REMAKE_LOST_ACCOUNTS", default=False
+    )
 
     OIDC_RP_CLIENT_ID = env("OIDC_RP_CLIENT_ID")
     OIDC_RP_CLIENT_SECRET = env("OIDC_RP_CLIENT_SECRET")

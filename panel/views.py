@@ -176,6 +176,7 @@ class AuditLogView(AdminRequiredMixin, ListView):
 def create_keycloak_account(user):
     """Create the user's Keycloak account; the error to show, or None."""
     from accounts.keycloak_admin import (
+        KeycloakRefused,
         KeycloakUnavailable,
         KeycloakUserExists,
         push_user,
@@ -183,6 +184,8 @@ def create_keycloak_account(user):
 
     try:
         push_user(user)
+    except KeycloakRefused as refusal:
+        return _("Keycloak refused the account: %(reason)s") % {"reason": refusal}
     except KeycloakUserExists:
         return _("Keycloak already has an account named %(username)s.") % {
             "username": user.username

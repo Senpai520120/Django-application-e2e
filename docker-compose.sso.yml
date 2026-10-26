@@ -44,6 +44,9 @@ services:
       # demo_admin is an admin, so it is linked by its Keycloak id (fixed in
       # the realm file), never by username. Space-separated username=id pairs.
       KEYCLOAK_LINKS: demo_admin=00000000-0000-4000-8000-00000000a001
+      # This Keycloak keeps its data inside its container and forgets it on
+      # `down`: make the app's accounts again on start. Off in production.
+      KEYCLOAK_REMAKE_LOST_ACCOUNTS: "True"
     healthcheck:
       # /login/ now redirects to localhost:8080, which is not Keycloak inside
       # this container. This page is public and answers 200 by itself.

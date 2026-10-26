@@ -381,7 +381,19 @@ its `django-app` client, which may only view and manage users. Email and name
 are optional in the realm, as in the panel.
 
 Not synced: a password changed in Django later, and switching a user off
-(the app refuses them anyway). Keycloak keeps its own copy from then on. With SSO on there
+(the app refuses them anyway). Keycloak keeps its own copy from then on.
+
+**When Keycloak loses accounts.** This development Keycloak keeps its data
+inside its container, so after `docker compose down` it has only the realm
+file again. With `KEYCLOAK_REMAKE_LOST_ACCOUNTS=True` (set in
+`docker-compose.sso.yml`) the app makes the lost accounts again on start, with
+the users' current passwords. Leave it off in production: there an account
+missing in Keycloak was deleted on purpose, and the app only reports it.
+
+**Disabled in Keycloak while signed in.** Every 15 minutes
+(`OIDC_RENEW_ID_TOKEN_EXPIRY_SECONDS`) the app silently asks Keycloak again
+about a signed-in user; someone disabled or deleted there is signed out then.
+Switching a user off in the panel works at once. With SSO on there
 are no local passwords at all, the `/admin/` form included: Keycloak is the
 only way in, and a user switched off in the panel loses their session at once.
 

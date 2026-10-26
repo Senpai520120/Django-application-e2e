@@ -87,11 +87,20 @@ class KeycloakBackend(OIDCAuthenticationBackend):
             logger.warning("Keycloak sign-in refused: %s was just created", username)
             raise PermissionDenied from None
 
-    @transaction.atomic
     def update_user(self, user, claims):
-        KeycloakIdentity.objects.get_or_create(
-            user=user, defaults={"sub": claims["sub"]}
-        )
+        try:
+            with transaction.atomic():
+                identity, _ = KeycloakIdentity.objects.get_or_create(
+                    user=user, defaults={"sub": claims["sub"]}
+                )
+        except IntegrityError:
+            # This sub was linked to another user a moment ago.
+            identity = None
+        if identity is None or identity.sub != claims["sub"]:
+            # The user is linked to another Keycloak account: a race of two
+            # first sign-ins. Never let one account into another's user.
+            logger.warning("Keycloak sign-in refused: %s is linked elsewhere", user)
+            raise PermissionDenied
         # Profile fields follow Keycloak; groups are left to the panel.
         # A name too long for its column is cut; an email is not, since a
         # cut address is somebody else's or nobody's.

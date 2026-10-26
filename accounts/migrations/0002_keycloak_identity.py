@@ -7,8 +7,6 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
 
-    initial = True
-
     dependencies = [
         ("accounts", "0001_seed_groups"),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),

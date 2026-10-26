@@ -2,10 +2,14 @@
 
 For the switch to SSO: users created while it was off keep signing in with
 their own password, now on the Keycloak form. A link whose Keycloak account
-is gone (Keycloak started again from the realm file) is dropped and the
-account made again. Safe to re-run: accounts that exist are left alone, and
-a username Keycloak already has is skipped (an ordinary user is linked to it
-on the first sign-in; an admin needs `link_keycloak_user`).
+is gone is only reported, unless KEYCLOAK_REMAKE_LOST_ACCOUNTS is on (the
+development Keycloak, which forgets its accounts on `down`): then the
+account is made again. In production a missing account was deleted on
+purpose, and making it again would undo that.
+
+Safe to re-run: accounts that exist are left alone, and a username Keycloak
+already has is skipped (an ordinary user is linked to it on the first
+sign-in; an admin needs `link_keycloak_user`).
 
     python manage.py push_users_to_keycloak
 """
@@ -15,6 +19,7 @@ from django.contrib.auth.models import User
 from django.core.management.base import BaseCommand, CommandError
 
 from accounts.keycloak_admin import (
+    KeycloakRefused,
     KeycloakUnavailable,
     KeycloakUserExists,
     account_exists,
@@ -38,15 +43,23 @@ class Command(BaseCommand):
                 if identity is not None:
                     if account_exists(identity.sub):
                         continue
-                    # Keycloak lost the account: forget the link, make it again.
+                    if not settings.KEYCLOAK_REMAKE_LOST_ACCOUNTS:
+                        skipped += 1
+                        self.stdout.write(
+                            f"gone from Keycloak, left so: {user.username}"
+                        )
+                        continue
+                    # The account behind the link is gone: the link is of no use.
                     KeycloakIdentity.objects.filter(pk=identity.pk).delete()
                     user.keycloak_identity = None
                     self.stdout.write(f"gone from Keycloak: {user.username}")
                 try:
                     push_user(user)
-                except KeycloakUserExists:
+                except (KeycloakUserExists, KeycloakRefused) as refusal:
                     skipped += 1
-                    self.stdout.write(f"already in Keycloak: {user.username}")
+                    self.stdout.write(
+                        f"not created in Keycloak: {user.username} ({refusal})"
+                    )
                     continue
                 created += 1
                 self.stdout.write(f"created in Keycloak: {user.username}")
@@ -54,5 +67,5 @@ class Command(BaseCommand):
             raise CommandError(f"Keycloak is not available: {error}") from error
 
         self.stdout.write(
-            self.style.SUCCESS(f"Done. Created: {created}, already there: {skipped}.")
+            self.style.SUCCESS(f"Done. Created: {created}, not created: {skipped}.")
         )

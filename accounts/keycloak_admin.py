@@ -12,6 +12,7 @@ the realm gives only the view-users and manage-users roles.
 
 import base64
 import json
+import time
 
 import requests
 from django.conf import settings
@@ -27,6 +28,13 @@ class KeycloakUnavailable(Exception):
 
 class KeycloakUserExists(Exception):
     """Keycloak already has an account with this username."""
+
+
+class KeycloakRefused(Exception):
+    """Keycloak would not create the account, for example: email taken.
+
+    The message is Keycloak's own, meant to be shown to the admin.
+    """
 
 
 def credential_from_hash(encoded):
@@ -80,6 +88,10 @@ def push_user(user):
 
     response = call("post", "/users", json=account)
     if response.status_code == 409:
+        # 409 also means "same email", which is not the same account.
+        message = error_message(response)
+        if "email" in message.lower():
+            raise KeycloakRefused(message)
         raise KeycloakUserExists(user.username)
     if response.status_code != 201:
         raise KeycloakUnavailable(f"creating {user.username}: {response.status_code}")
@@ -104,23 +116,44 @@ def account_exists(sub):
     return True
 
 
-def call(method, path, **kwargs):
-    """One Admin API request with a fresh service-account token."""
+def error_message(response):
     try:
-        token = requests.post(
-            settings.OIDC_OP_TOKEN_ENDPOINT,
-            data={
-                "grant_type": "client_credentials",
-                "client_id": settings.OIDC_RP_CLIENT_ID,
-                "client_secret": settings.OIDC_RP_CLIENT_SECRET,
-            },
-            timeout=TIMEOUT,
-        )
-        token.raise_for_status()
+        return str(response.json().get("errorMessage", ""))
+    except (ValueError, AttributeError):
+        return ""
+
+
+# The service-account token, reused until shortly before it expires:
+# pushing many users at start would otherwise ask for one per request.
+_token = {"value": None, "expires": 0.0}
+
+
+def service_token():
+    if _token["value"] and time.monotonic() < _token["expires"]:
+        return _token["value"]
+    response = requests.post(
+        settings.OIDC_OP_TOKEN_ENDPOINT,
+        data={
+            "grant_type": "client_credentials",
+            "client_id": settings.OIDC_RP_CLIENT_ID,
+            "client_secret": settings.OIDC_RP_CLIENT_SECRET,
+        },
+        timeout=TIMEOUT,
+    )
+    response.raise_for_status()
+    body = response.json()
+    _token["value"] = body["access_token"]
+    _token["expires"] = time.monotonic() + int(body.get("expires_in", 60)) - 30
+    return _token["value"]
+
+
+def call(method, path, **kwargs):
+    """One Admin API request as the app's service account."""
+    try:
         return requests.request(
             method,
             settings.OIDC_ADMIN_URL + path,
-            headers={"Authorization": f"Bearer {token.json()['access_token']}"},
+            headers={"Authorization": f"Bearer {service_token()}"},
             timeout=TIMEOUT,
             **kwargs,
         )

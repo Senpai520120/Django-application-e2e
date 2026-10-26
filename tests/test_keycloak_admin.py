@@ -15,6 +15,7 @@ from django.contrib.auth.models import User
 from django.core.management import CommandError, call_command
 from django.urls import reverse
 
+from accounts import keycloak_admin
 from accounts.keycloak_admin import (
     KeycloakUnavailable,
     KeycloakUserExists,
@@ -54,14 +55,18 @@ class FakeKeycloak:
     def __init__(self):
         self.accounts = {}
         self.down = False
+        self.tokens_given = 0
 
     def post(self, url, data, timeout):
         if self.down:
             raise requests.ConnectionError("connection refused")
         assert data["grant_type"] == "client_credentials"
-        return FakeResponse(200, {"access_token": "service-token"})
+        self.tokens_given += 1
+        return FakeResponse(200, {"access_token": "service-token", "expires_in": 300})
 
     def request(self, method, url, headers, timeout, json=None):
+        if self.down:
+            raise requests.ConnectionError("connection refused")
         assert headers == {"Authorization": "Bearer service-token"}
         users_url = "http://kc/admin/realms/myapp/users"
         if method == "get":
@@ -70,7 +75,10 @@ class FakeKeycloak:
             return FakeResponse(200 if sub in ids else 404)
         assert (method, url) == ("post", users_url)
         if json["username"] in self.accounts:
-            return FakeResponse(409)
+            return FakeResponse(409, {"errorMessage": "User exists with same username"})
+        emails = {account.get("email") for account in self.accounts.values()}
+        if json.get("email") and json["email"] in emails:
+            return FakeResponse(409, {"errorMessage": "User exists with same email"})
         sub = f"kc-{len(self.accounts) + 1}"
         self.accounts[json["username"]] = {**json, "id": sub}
         return FakeResponse(201, headers={"Location": f"{url}/{sub}"})
@@ -83,12 +91,16 @@ def keycloak(settings):
     reverse("home")
     for name, value in SSO_SETTINGS.items():
         setattr(settings, name, value)
+    settings.KEYCLOAK_REMAKE_LOST_ACCOUNTS = False
+    # The service-account token is kept between calls; not between tests.
+    patch.dict(keycloak_admin._token, {"value": None, "expires": 0.0}).start()
     fake = FakeKeycloak()
     with (
         patch("accounts.keycloak_admin.requests.post", fake.post),
         patch("accounts.keycloak_admin.requests.request", fake.request),
     ):
         yield fake
+    patch.stopall()
 
 
 # --- the password hash ---
@@ -223,6 +235,26 @@ def test_panel_refuses_a_username_keycloak_has(client, group_admin, keycloak):
 
 
 @pytest.mark.django_db
+def test_panel_shows_why_keycloak_refused(client, group_admin, keycloak):
+    keycloak.accounts["other"] = {"id": "kc-other", "email": "olga@example.com"}
+    client.force_login(group_admin)
+
+    response = client.post(
+        reverse("panel:user_create"),
+        {
+            "username": "olga",
+            "email": "olga@example.com",
+            "password1": "Str0ng-Pass!2024",
+            "password2": "Str0ng-Pass!2024",
+        },
+    )
+
+    page = response.content.decode()
+    assert "Keycloak refused the account: User exists with same email" in page
+    assert not User.objects.filter(username="olga").exists()
+
+
+@pytest.mark.django_db
 def test_panel_without_sso_does_not_call_keycloak(client, group_admin):
     with patch("accounts.keycloak_admin.requests.post") as post:
         response = create_in_panel(client, group_admin)
@@ -247,8 +279,8 @@ def test_command_pushes_users_without_an_account(keycloak, plain_user, group_adm
     out = push_all()
 
     assert "created in Keycloak: ivan" in out
-    assert "already in Keycloak: boss" in out
-    assert "Created: 1, already there: 1." in out
+    assert "not created in Keycloak: boss" in out
+    assert "Created: 1, not created: 1." in out
     assert plain_user.keycloak_identity.sub == keycloak.accounts["ivan"]["id"]
 
 
@@ -256,13 +288,14 @@ def test_command_pushes_users_without_an_account(keycloak, plain_user, group_adm
 def test_command_run_twice_creates_nothing_new(keycloak, plain_user):
     push_all()
 
-    assert "Created: 0, already there: 0." in push_all()
+    assert "Created: 0, not created: 0." in push_all()
     assert len(keycloak.accounts) == 1
 
 
 @pytest.mark.django_db
-def test_command_remakes_accounts_keycloak_lost(keycloak, plain_user):
-    """Keycloak started again from the realm file: its accounts are gone."""
+def test_command_remakes_accounts_keycloak_lost(keycloak, plain_user, settings):
+    """Development Keycloak started again from the realm file: accounts gone."""
+    settings.KEYCLOAK_REMAKE_LOST_ACCOUNTS = True
     push_all()
     old_sub = plain_user.keycloak_identity.sub
     keycloak.accounts.clear()
@@ -275,6 +308,52 @@ def test_command_remakes_accounts_keycloak_lost(keycloak, plain_user):
     new_sub = KeycloakIdentity.objects.get(user=plain_user).sub
     assert new_sub != old_sub
     assert new_sub == keycloak.accounts["ivan"]["id"]
+
+
+@pytest.mark.django_db
+def test_command_leaves_a_deleted_account_deleted(keycloak, plain_user):
+    """Production: an account missing in Keycloak was deleted on purpose."""
+    push_all()
+    sub = plain_user.keycloak_identity.sub
+    keycloak.accounts.clear()
+
+    out = push_all()
+
+    assert "gone from Keycloak, left so: ivan" in out
+    assert keycloak.accounts == {}
+    assert KeycloakIdentity.objects.get(user=plain_user).sub == sub
+
+
+@pytest.mark.django_db
+def test_command_drops_a_lost_link_when_the_name_is_taken(
+    keycloak, plain_user, settings
+):
+    """The realm file made the account again under a new id: link by name later."""
+    settings.KEYCLOAK_REMAKE_LOST_ACCOUNTS = True
+    push_all()
+    keycloak.accounts = {"ivan": {"id": "kc-from-the-realm-file"}}
+
+    out = push_all()
+
+    assert "not created in Keycloak: ivan" in out
+    assert not KeycloakIdentity.objects.exists()
+
+
+@pytest.mark.django_db
+def test_command_reports_a_taken_email(keycloak, plain_user):
+    keycloak.accounts["other"] = {"id": "kc-other", "email": plain_user.email}
+
+    out = push_all()
+
+    assert "not created in Keycloak: ivan (User exists with same email)" in out
+
+
+@pytest.mark.django_db
+def test_one_token_serves_many_calls(keycloak, plain_user, group_admin):
+    push_all()
+    push_all()
+
+    assert keycloak.tokens_given == 1
 
 
 @pytest.mark.django_db

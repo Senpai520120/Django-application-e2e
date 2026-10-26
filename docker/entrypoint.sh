@@ -21,7 +21,12 @@ if [ -n "${KEYCLOAK_LINKS:-}" ]; then
 fi
 
 # Users made while SSO was off get Keycloak accounts with their own password.
-if [ "${OIDC_ENABLED:-False}" = "True" ]; then
+# The same values django-environ's env.bool takes as true.
+case "$(printf %s "${OIDC_ENABLED:-}" | tr '[:upper:]' '[:lower:]')" in
+    true|on|ok|y|yes|1) sso=1 ;;
+    *) sso=0 ;;
+esac
+if [ "$sso" = 1 ]; then
     echo "==> Users without a Keycloak account"
     # Not fatal: without Keycloak the app still starts, and the next start
     # pushes whoever is left.

@@ -219,6 +219,24 @@ def test_exact_spelling_wins_over_other_case(backend, plain_user):
 
 
 @pytest.mark.django_db
+def test_user_linked_to_another_account_is_not_signed_in(backend, plain_user):
+    """A found user whose link names another Keycloak account is refused."""
+    KeycloakIdentity.objects.create(user=plain_user, sub="sub-someone-else")
+
+    with pytest.raises(PermissionDenied):
+        backend.update_user(plain_user, claims(preferred_username="ivan"))
+
+
+@pytest.mark.django_db
+def test_sub_linked_to_another_user_is_not_a_crash(backend, plain_user):
+    other = User.objects.create_user("other")
+    KeycloakIdentity.objects.create(user=other, sub="sub-ivan")
+
+    with pytest.raises(PermissionDenied):
+        backend.update_user(plain_user, claims())
+
+
+@pytest.mark.django_db
 def test_two_users_differing_only_in_case_are_not_guessed(backend):
     User.objects.create_user("IVAN")
     User.objects.create_user("Ivan")
