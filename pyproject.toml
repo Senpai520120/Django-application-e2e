@@ -36,6 +36,7 @@ omit = ["*/migrations/*", "config/asgi.py", "config/wsgi.py"]
 
 [tool.coverage.report]
 show_missing = true
+fail_under = 90
 skip_covered = true
 exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError"]
 

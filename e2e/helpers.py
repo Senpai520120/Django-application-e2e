@@ -2,10 +2,19 @@
 
 import uuid
 
+import pytest
 from playwright.sync_api import APIResponse, Page
 
+import config
 from config import User
+from pages.keycloak_login_page import KeycloakLoginPage
 from pages.login_page import LoginPage
+
+# With SSO (E2E_AUTH=keycloak) these tests have nothing to check:
+# tests/test_sso.py checks the same things on the Keycloak side.
+local_sign_in_only = pytest.mark.skipif(
+    config.SSO, reason="checks the app's own sign-in form, not used with SSO"
+)
 
 
 def unique_name(prefix: str) -> str:
@@ -19,7 +28,22 @@ def unique_name(prefix: str) -> str:
 
 
 def sign_in(page: Page, user: User) -> Page:
-    """Open /login/, sign in and wait until the app lets us in."""
+    """Open /login/, sign in and wait until the app lets us in.
+
+    With SSO /login/ leads to the Keycloak form, and after it Keycloak sends
+    the browser back to the app.
+    """
+    if config.SSO:
+        page.goto("/login/")
+        KeycloakLoginPage(page).sign_in(user.username, user.password)
+        # Keycloak -> /oidc/callback/ -> the page the app was asked for.
+        page.wait_for_url(
+            lambda url: not url.startswith(config.KEYCLOAK_URL) and "/oidc/" not in url
+        )
+        # The app refused the account: say so here, not as a timeout later.
+        assert "/login/failed/" not in page.url, f"the app refused {user.username}"
+        return page
+
     LoginPage(page).open().sign_in(user.username, user.password)
     # After a successful sign-in the app leaves /login/.
     page.wait_for_url(lambda url: "/login/" not in url)

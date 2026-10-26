@@ -31,3 +31,18 @@ class User:
 ADMIN = User("demo_admin")  # member of the "admin" role, can open /manage/
 REGULAR_USER = User("demo_user")  # member of the "user" role, gets 403 on /manage/
 INACTIVE_USER = User("demo_inactive")  # switched off, cannot sign in
+
+# --- sign-in through Keycloak (docker-compose.sso.yml) ---
+
+# E2E_AUTH=keycloak: the app sends sign-in to Keycloak, and the tests fill
+# the Keycloak form instead of the app's own. Tests of the app's own form
+# are skipped then, and tests/test_sso.py runs.
+SSO = os.getenv("E2E_AUTH", "local") == "keycloak"
+
+# The realm as the browser sees it.
+KEYCLOAK_URL = os.getenv("KEYCLOAK_URL", "http://localhost:8080/realms/myapp")
+
+# Accounts that exist only in Keycloak (keycloak/realm-myapp.json).
+KC_DISABLED = User("kc_disabled")  # switched off in Keycloak
+KC_NEWCOMER = User("kc_newcomer")  # not in the app until the first sign-in
+KC_PROMOTED = User("kc_promoted")  # gets the admin role in the panel during a test

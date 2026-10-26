@@ -1,5 +1,8 @@
 """Views of the /manage/ panel."""
 
+import logging
+
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.models import Group, User
 from django.core.exceptions import PermissionDenied
@@ -15,6 +18,8 @@ from django.views.generic import CreateView, ListView, UpdateView
 from accounts.mixins import AdminRequiredMixin
 from panel.forms import PanelUserCreationForm, UserRolesForm
 from panel.models import RoleChange
+
+logger = logging.getLogger(__name__)
 
 
 def safe_next(request):
@@ -120,6 +125,14 @@ class UserCreateView(AdminRequiredMixin, CreateView):
     @transaction.atomic
     def form_valid(self, form):
         response = super().form_valid(form)
+        if settings.OIDC_ENABLED:
+            # With SSO the user signs in to Keycloak: no account there, no way in.
+            # If Keycloak refuses, the Django user is not created either.
+            error = create_keycloak_account(self.object)
+            if error:
+                transaction.set_rollback(True)
+                form.add_error(None, error)
+                return self.form_invalid(form)
         RoleChange.log_diff(
             actor=self.request.user,
             target=self.object,
@@ -158,3 +171,26 @@ class AuditLogView(AdminRequiredMixin, ListView):
     context_object_name = "changes"
     paginate_by = 20
     queryset = RoleChange.objects.select_related("actor", "target")
+
+
+def create_keycloak_account(user):
+    """Create the user's Keycloak account; the error to show, or None."""
+    from accounts.keycloak_admin import (
+        KeycloakRefused,
+        KeycloakUnavailable,
+        KeycloakUserExists,
+        push_user,
+    )
+
+    try:
+        push_user(user)
+    except KeycloakRefused as refusal:
+        return _("Keycloak refused the account: %(reason)s") % {"reason": refusal}
+    except KeycloakUserExists:
+        return _("Keycloak already has an account named %(username)s.") % {
+            "username": user.username
+        }
+    except KeycloakUnavailable:
+        logger.exception("Keycloak did not create %s", user.username)
+        return _("Keycloak is not available, the user was not created. Try again.")
+    return None

@@ -5,7 +5,7 @@ import re
 from playwright.sync_api import Page, expect
 
 import config
-from helpers import send_form
+from helpers import local_sign_in_only, send_form
 from pages.home_page import HomePage
 from pages.user_roles_page import UserRolesPage
 from pages.users_page import UsersPage
@@ -41,6 +41,7 @@ def test_10_regular_user_does_not_see_admin_links(user_page: Page):
     expect(home_page.header_link("Audit")).to_have_count(0)
 
 
+@local_sign_in_only
 def test_11_anonymous_user_cannot_open_file_manager(page: Page):
     """TC-11: an anonymous user who opens /files/ is sent to sign in."""
     page.goto("/files/")

@@ -255,6 +255,24 @@ jobs:
           E2E_MAX_FILE_SIZE: "5242880"
         run: pytest e2e --output=test-results/s3
 
+      # Sign-in through Keycloak: the same scenarios plus tests/test_sso.py.
+      # The realm and its accounts come from keycloak/realm-myapp.json.
+      - name: Restart the stack in SSO mode
+        run: |
+          docker compose --profile s3 down -v
+          KEY=$(python -c "import secrets; print(secrets.token_urlsafe(64))")
+          printf 'SECRET_KEY=%s\n' "$KEY" > .env
+          # --wait: up returns once Keycloak and the app pass their healthchecks.
+          docker compose -f docker-compose.yml -f docker-compose.sso.yml up -d --build --wait
+          curl -sf http://localhost:8080/realms/myapp/.well-known/openid-configuration > /dev/null
+
+      - name: Run E2E (Keycloak SSO)
+        env:
+          BASE_URL: http://127.0.0.1:8000
+          E2E_AUTH: keycloak
+          E2E_MAX_FILE_SIZE: "5242880"
+        run: pytest e2e --output=test-results/sso
+
       - name: Traces, screenshots and videos of failed tests
         if: failure()
         uses: actions/upload-artifact@v7
@@ -265,11 +283,11 @@ jobs:
 
       - name: Container logs
         if: failure()
-        run: docker compose logs
+        run: docker compose -f docker-compose.yml -f docker-compose.sso.yml logs
 
       - name: Shut the stack down
         if: always()
-        run: docker compose down -v
+        run: docker compose -f docker-compose.yml -f docker-compose.sso.yml down -v --remove-orphans
 
   publish:
     name: Publish the image to GHCR

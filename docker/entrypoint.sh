@@ -13,5 +13,26 @@ if [ "${SEED_DEMO_USERS:-0}" = "1" ]; then
     python manage.py seed_demo_users --force
 fi
 
+# Admins are not linked to Keycloak by username on sign-in; see
+# accounts/management/commands/link_keycloak_user.py.
+if [ -n "${KEYCLOAK_LINKS:-}" ]; then
+    echo "==> Keycloak links (KEYCLOAK_LINKS)"
+    python manage.py link_keycloak_user --replace $KEYCLOAK_LINKS
+fi
+
+# Users made while SSO was off get Keycloak accounts with their own password.
+# The same values django-environ's env.bool takes as true.
+case "$(printf %s "${OIDC_ENABLED:-}" | tr '[:upper:]' '[:lower:]')" in
+    true|on|ok|y|yes|1) sso=1 ;;
+    *) sso=0 ;;
+esac
+if [ "$sso" = 1 ]; then
+    echo "==> Users without a Keycloak account"
+    # Not fatal: without Keycloak the app still starts, and the next start
+    # pushes whoever is left.
+    python manage.py push_users_to_keycloak ||
+        echo "WARNING: users were not pushed to Keycloak; they will be on the next start"
+fi
+
 echo "==> Starting: $*"
 exec "$@"

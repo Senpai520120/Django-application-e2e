@@ -100,6 +100,59 @@ LOGIN_URL = "login"
 LOGIN_REDIRECT_URL = "home"
 LOGOUT_REDIRECT_URL = "login"
 
+# Sign-in through Keycloak (OpenID Connect) instead of the local form.
+# Keycloak answers "who you are"; roles and switching a user off stay in the
+# panel. Off by default; docker-compose.sso.yml turns it on.
+OIDC_ENABLED = env.bool("OIDC_ENABLED", default=False)
+if OIDC_ENABLED:
+    INSTALLED_APPS.append("mozilla_django_oidc")
+    # Keycloak is the only way in: without ModelBackend a local password
+    # (at /admin/login/, say) cannot get around a user disabled in Keycloak.
+    AUTHENTICATION_BACKENDS = ["accounts.oidc.KeycloakBackend"]
+    # A signed-in user is asked about again, silently, once the id token
+    # expires: someone disabled in Keycloak since is signed out then.
+    MIDDLEWARE.append("mozilla_django_oidc.middleware.SessionRefresh")
+    OIDC_RENEW_ID_TOKEN_EXPIRY_SECONDS = env.int(
+        "OIDC_RENEW_ID_TOKEN_EXPIRY_SECONDS", default=15 * 60
+    )
+    # Two addresses of the same realm: the browser reaches Keycloak at
+    # localhost:8080, the app inside docker at keycloak:8080.
+    _browser = env("OIDC_BROWSER_URL") + "/protocol/openid-connect"
+    _realm_url = env("OIDC_BACKEND_URL", default=env("OIDC_BROWSER_URL"))
+    _backend = _realm_url + "/protocol/openid-connect"
+    # The Admin API of the same realm: http://host/realms/x -> http://host/admin/realms/x.
+    # The panel creates users there through the client's service account.
+    OIDC_ADMIN_URL = _realm_url.replace("/realms/", "/admin/realms/", 1)
+    # A link whose Keycloak account is gone: make the account again (on for
+    # the development Keycloak, which forgets everything on `down`) or only
+    # report it (off: in production a missing account was deleted on purpose).
+    KEYCLOAK_REMAKE_LOST_ACCOUNTS = env.bool(
+        "KEYCLOAK_REMAKE_LOST_ACCOUNTS", default=False
+    )
+
+    OIDC_RP_CLIENT_ID = env("OIDC_RP_CLIENT_ID")
+    OIDC_RP_CLIENT_SECRET = env("OIDC_RP_CLIENT_SECRET")
+    OIDC_RP_SIGN_ALGO = "RS256"
+    OIDC_RP_SCOPES = "openid email profile"
+    OIDC_USE_PKCE = True
+    OIDC_OP_AUTHORIZATION_ENDPOINT = f"{_browser}/auth"
+    OIDC_OP_LOGOUT_ENDPOINT = f"{_browser}/logout"
+    OIDC_OP_TOKEN_ENDPOINT = f"{_backend}/token"
+    OIDC_OP_USER_ENDPOINT = f"{_backend}/userinfo"
+    OIDC_OP_JWKS_ENDPOINT = f"{_backend}/certs"
+    # The id token goes back to Keycloak on sign-out as id_token_hint.
+    OIDC_STORE_ID_TOKEN = True
+    OIDC_OP_LOGOUT_URL_METHOD = "accounts.oidc.keycloak_logout_url"
+    # Where Keycloak sends the browser after sign-out. Empty: the app's own
+    # address as the request saw it, which behind a proxy needs
+    # USE_X_FORWARDED_PROTO to come out as https.
+    OIDC_POST_LOGOUT_REDIRECT_URL = env("OIDC_POST_LOGOUT_REDIRECT_URL", default="")
+    LOGIN_URL = "oidc_authentication_init"
+    # Not "/": that page needs a signed-in user, so a refused user would go
+    # to Keycloak, which still remembers them, and back here in a loop.
+    # A path, not a URL name: mozilla-django-oidc redirects to it as is.
+    LOGIN_REDIRECT_URL_FAILURE = "/login/failed/"
+
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = env("TIME_ZONE", default="UTC")
 USE_I18N = True

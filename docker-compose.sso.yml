@@ -1,0 +1,58 @@
+# Sign-in through Keycloak (SSO). Laid over the main file:
+#   docker compose -f docker-compose.yml -f docker-compose.sso.yml up -d --build
+# Keycloak admin console: http://localhost:8080/admin (admin / admin).
+# Demo accounts and the realm come from keycloak/realm-myapp.json.
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.4
+    command: start-dev --import-realm
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HEALTH_ENABLED: "true"
+      # The browser reaches Keycloak at localhost:8080, the app inside docker
+      # at keycloak:8080. Pages and tokens name the browser address; the
+      # back channel (code -> token) answers on whatever address it was asked.
+      KC_HOSTNAME: http://localhost:8080
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+    volumes:
+      - ./keycloak:/opt/keycloak/data/import:ro
+    ports:
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      # The image has no curl: ask the management port with bash alone.
+      test:
+        - CMD-SHELL
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/9000 &&
+          printf 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 &&
+          grep -q '"UP"' <&3
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  web:
+    environment:
+      OIDC_ENABLED: "True"
+      OIDC_RP_CLIENT_ID: django-app
+      # Dev-only secret, the same as in keycloak/realm-myapp.json.
+      OIDC_RP_CLIENT_SECRET: dev-only-secret
+      OIDC_BROWSER_URL: http://localhost:8080/realms/myapp
+      OIDC_BACKEND_URL: http://keycloak:8080/realms/myapp
+      # demo_admin is an admin, so it is linked by its Keycloak id (fixed in
+      # the realm file), never by username. Space-separated username=id pairs.
+      KEYCLOAK_LINKS: demo_admin=00000000-0000-4000-8000-00000000a001
+      # This Keycloak keeps its data inside its container and forgets it on
+      # `down`: make the app's accounts again on start. Off in production.
+      KEYCLOAK_REMAKE_LOST_ACCOUNTS: "True"
+    healthcheck:
+      # /login/ now redirects to localhost:8080, which is not Keycloak inside
+      # this container. This page is public and answers 200 by itself.
+      test:
+        - CMD-SHELL
+        - python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/login/failed/')"
+    depends_on:
+      keycloak:
+        condition: service_healthy

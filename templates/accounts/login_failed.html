@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+
+{% block title %}Sign-in failed — Users &amp; Roles{% endblock %}
+
+{% block content %}
+  <h1>Sign-in failed</h1>
+  <p>The sign-in did not go through. Try again: it may have taken too long or been cancelled.</p>
+  <p>If it fails again, this account may be switched off in the app or not allowed to sign in this way. Ask an administrator.</p>
+  {% if sso_logout_url %}
+    {# Keycloak still remembers this account: "try again" would only bring #}
+    {# the same account back here, so signing out there comes first. #}
+    <p><a href="{{ sso_logout_url }}">Sign out of Keycloak and try again</a></p>
+  {% else %}
+    <p><a href="{% url 'login' %}">Try again</a></p>
+  {% endif %}
+{% endblock %}
