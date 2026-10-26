@@ -61,9 +61,14 @@ class FakeKeycloak:
         assert data["grant_type"] == "client_credentials"
         return FakeResponse(200, {"access_token": "service-token"})
 
-    def request(self, method, url, headers, timeout, json):
+    def request(self, method, url, headers, timeout, json=None):
         assert headers == {"Authorization": "Bearer service-token"}
-        assert (method, url) == ("post", "http://kc/admin/realms/myapp/users")
+        users_url = "http://kc/admin/realms/myapp/users"
+        if method == "get":
+            sub = url.removeprefix(users_url + "/")
+            ids = {account["id"] for account in self.accounts.values()}
+            return FakeResponse(200 if sub in ids else 404)
+        assert (method, url) == ("post", users_url)
         if json["username"] in self.accounts:
             return FakeResponse(409)
         sub = f"kc-{len(self.accounts) + 1}"
@@ -253,6 +258,23 @@ def test_command_run_twice_creates_nothing_new(keycloak, plain_user):
 
     assert "Created: 0, already there: 0." in push_all()
     assert len(keycloak.accounts) == 1
+
+
+@pytest.mark.django_db
+def test_command_remakes_accounts_keycloak_lost(keycloak, plain_user):
+    """Keycloak started again from the realm file: its accounts are gone."""
+    push_all()
+    old_sub = plain_user.keycloak_identity.sub
+    keycloak.accounts.clear()
+    keycloak.accounts["someone"] = {"id": "kc-other"}
+
+    out = push_all()
+
+    assert "gone from Keycloak: ivan" in out
+    assert "created in Keycloak: ivan" in out
+    new_sub = KeycloakIdentity.objects.get(user=plain_user).sub
+    assert new_sub != old_sub
+    assert new_sub == keycloak.accounts["ivan"]["id"]
 
 
 @pytest.mark.django_db

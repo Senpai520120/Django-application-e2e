@@ -89,6 +89,21 @@ def push_user(user):
     return sub
 
 
+def account_exists(sub):
+    """Whether Keycloak still has the account with this id.
+
+    In development Keycloak keeps its data inside its container: after
+    `docker compose down` it starts again with the realm file only, and
+    the accounts the app made are gone while the links in Django remain.
+    """
+    response = call("get", f"/users/{sub}")
+    if response.status_code == 404:
+        return False
+    if response.status_code != 200:
+        raise KeycloakUnavailable(f"looking up {sub}: {response.status_code}")
+    return True
+
+
 def call(method, path, **kwargs):
     """One Admin API request with a fresh service-account token."""
     try:
