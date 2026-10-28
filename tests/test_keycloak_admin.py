@@ -38,7 +38,7 @@ SSO_SETTINGS = {
 class FakeResponse:
     def __init__(self, status_code, body=None, headers=None):
         self.status_code = status_code
-        self._body = body or {}
+        self._body = {} if body is None else body
         self.headers = headers or {}
 
     def json(self):
@@ -50,10 +50,15 @@ class FakeResponse:
 
 
 class FakeKeycloak:
-    """Answers the token and create-user calls; remembers created accounts."""
+    """Answers the token and create-user calls; remembers created accounts.
+
+    `directory` plays Active Directory behind Keycloak's User Federation:
+    username -> email of people Keycloak finds there.
+    """
 
     def __init__(self):
         self.accounts = {}
+        self.directory = {}
         self.down = False
         self.tokens_given = 0
 
@@ -64,24 +69,42 @@ class FakeKeycloak:
         self.tokens_given += 1
         return FakeResponse(200, {"access_token": "service-token", "expires_in": 300})
 
-    def request(self, method, url, headers, timeout, json=None):
+    def request(self, method, url, headers, timeout, json=None, params=None):
         if self.down:
             raise requests.ConnectionError("connection refused")
         assert headers == {"Authorization": "Bearer service-token"}
         users_url = "http://kc/admin/realms/myapp/users"
+        if method == "get" and url == users_url:
+            return FakeResponse(200, self.search(**params))
         if method == "get":
             sub = url.removeprefix(users_url + "/")
             ids = {account["id"] for account in self.accounts.values()}
             return FakeResponse(200 if sub in ids else 404)
         assert (method, url) == ("post", users_url)
-        if json["username"] in self.accounts:
+        names = {*self.accounts, *self.directory}
+        if json["username"] in names:
             return FakeResponse(409, {"errorMessage": "User exists with same username"})
         emails = {account.get("email") for account in self.accounts.values()}
+        emails |= set(self.directory.values())
         if json.get("email") and json["email"] in emails:
             return FakeResponse(409, {"errorMessage": "User exists with same email"})
         sub = f"kc-{len(self.accounts) + 1}"
         self.accounts[json["username"]] = {**json, "id": sub}
         return FakeResponse(201, headers={"Location": f"{url}/{sub}"})
+
+    def search(self, exact, username=None, email=None):
+        assert exact == "true"
+        found = [
+            {"username": name, "email": address, "federationLink": "ldap-id"}
+            for name, address in self.directory.items()
+            if name == username or (email and address == email)
+        ]
+        found += [
+            {"username": name, "email": account.get("email")}
+            for name, account in self.accounts.items()
+            if name == username or (email and account.get("email") == email)
+        ]
+        return found
 
 
 @pytest.fixture
@@ -280,7 +303,7 @@ def test_command_pushes_users_without_an_account(keycloak, plain_user, group_adm
 
     assert "created in Keycloak: ivan" in out
     assert "not created in Keycloak: boss" in out
-    assert "Created: 1, not created: 1." in out
+    assert "Created: 1, not created: 1, in Active Directory: 0." in out
     assert plain_user.keycloak_identity.sub == keycloak.accounts["ivan"]["id"]
 
 
@@ -288,7 +311,7 @@ def test_command_pushes_users_without_an_account(keycloak, plain_user, group_adm
 def test_command_run_twice_creates_nothing_new(keycloak, plain_user):
     push_all()
 
-    assert "Created: 0, not created: 0." in push_all()
+    assert "Created: 0, not created: 0, in Active Directory: 0." in push_all()
     assert len(keycloak.accounts) == 1
 
 
@@ -368,3 +391,79 @@ def test_command_stops_when_keycloak_is_down(keycloak, plain_user):
 def test_command_refuses_without_sso():
     with pytest.raises(CommandError, match="OIDC_ENABLED is off"):
         push_all()
+
+
+# --- Active Directory behind Keycloak (User Federation) ---
+
+
+@pytest.mark.django_db
+def test_in_directory_finds_people_by_name_or_email(keycloak, plain_user):
+    assert not keycloak_admin.in_directory(plain_user)
+
+    keycloak.directory["ivan"] = "other@corp.example.test"
+    assert keycloak_admin.in_directory(plain_user)
+
+    keycloak.directory = {"i.petrov": plain_user.email}
+    assert keycloak_admin.in_directory(plain_user)
+
+
+@pytest.mark.django_db
+def test_in_directory_ignores_keycloak_own_accounts(keycloak, plain_user):
+    keycloak.accounts["ivan"] = {"id": "kc-1", "email": plain_user.email}
+
+    assert not keycloak_admin.in_directory(plain_user)
+
+
+@pytest.mark.django_db
+def test_in_directory_with_a_strange_answer(keycloak, plain_user):
+    with (
+        patch.object(keycloak, "search", return_value={"error": "?"}),
+        pytest.raises(KeycloakUnavailable),
+    ):
+        keycloak_admin.in_directory(plain_user)
+
+
+@pytest.mark.django_db
+def test_command_makes_no_account_for_people_in_ad(keycloak, plain_user, group_admin):
+    keycloak.directory["i.petrov"] = plain_user.email  # same email, other name
+    keycloak.directory["boss"] = "boss@corp.example.test"  # same name
+
+    out = push_all()
+
+    assert "in Active Directory, left to it: ivan" in out
+    assert "in Active Directory, left to it: boss" in out
+    assert "Created: 0, not created: 0, in Active Directory: 2." in out
+    assert keycloak.accounts == {}
+    assert not KeycloakIdentity.objects.exists()
+
+
+@pytest.mark.django_db
+def test_command_does_not_remake_a_lost_account_of_a_person_now_in_ad(
+    keycloak, plain_user, settings
+):
+    settings.KEYCLOAK_REMAKE_LOST_ACCOUNTS = True
+    push_all()
+    keycloak.accounts.clear()
+    keycloak.directory["ivan"] = plain_user.email
+
+    out = push_all()
+
+    assert "in Active Directory, left to it: ivan" in out
+    assert keycloak.accounts == {}
+    assert not KeycloakIdentity.objects.exists()
+
+
+@pytest.mark.django_db
+def test_panel_user_in_ad_is_created_without_a_keycloak_account(
+    client, group_admin, keycloak
+):
+    keycloak.directory["olga"] = "olga@corp.example.test"
+
+    response = create_in_panel(client, group_admin)
+
+    assert response.status_code == 302
+    user = User.objects.get(username="olga")
+    assert not KeycloakIdentity.objects.filter(user=user).exists()
+    assert keycloak.accounts == {}
+    page = client.get(reverse("panel:user_list")).content.decode()
+    assert "olga is in Active Directory" in page

@@ -37,7 +37,11 @@ INACTIVE_USER = User("demo_inactive")  # switched off, cannot sign in
 # E2E_AUTH=keycloak: the app sends sign-in to Keycloak, and the tests fill
 # the Keycloak form instead of the app's own. Tests of the app's own form
 # are skipped then, and tests/test_sso.py runs.
-SSO = os.getenv("E2E_AUTH", "local") == "keycloak"
+# E2E_AUTH=ad: the same, with Active Directory behind Keycloak
+# (docker-compose.ad.yml), and tests/test_ad.py runs too.
+AUTH = os.getenv("E2E_AUTH", "local")
+SSO = AUTH in ("keycloak", "ad")
+AD = AUTH == "ad"
 
 # The realm as the browser sees it.
 KEYCLOAK_URL = os.getenv("KEYCLOAK_URL", "http://localhost:8080/realms/myapp")
@@ -46,3 +50,12 @@ KEYCLOAK_URL = os.getenv("KEYCLOAK_URL", "http://localhost:8080/realms/myapp")
 KC_DISABLED = User("kc_disabled")  # switched off in Keycloak
 KC_NEWCOMER = User("kc_newcomer")  # not in the app until the first sign-in
 KC_PROMOTED = User("kc_promoted")  # gets the admin role in the panel during a test
+
+# --- Active Directory (Samba, docker-compose.ad.yml) ---
+
+# LDAPS of the test domain controller, published on the host for the tests.
+AD_URL = os.getenv("E2E_AD_URL", "ldaps://127.0.0.1:6636")
+AD_ADMIN = os.getenv("E2E_AD_ADMIN", "Administrator@corp.example.test")
+AD_ADMIN_PASSWORD = os.getenv("E2E_AD_ADMIN_PASSWORD", "Samba-admin-123")
+AD_USERS_DN = "CN=Users,DC=corp,DC=example,DC=test"
+AD_EMAIL_DOMAIN = "corp.example.test"

@@ -246,6 +246,89 @@ def test_two_users_differing_only_in_case_are_not_guessed(backend):
     assert not KeycloakIdentity.objects.exists()
 
 
+# --- one person, one email ---
+
+
+@pytest.mark.django_db
+def test_verified_email_links_a_user_with_another_name(backend, plain_user):
+    """Made here as "ivan", in Active Directory as "i.petrov": the same person."""
+    user = sign_in(
+        backend,
+        claims(
+            preferred_username="i.petrov", email="IVAN@example.com", email_verified=True
+        ),
+    )
+
+    assert user == plain_user
+    assert user.username == "ivan"
+    assert KeycloakIdentity.objects.get(user=plain_user).sub == "sub-ivan"
+
+
+@pytest.mark.django_db
+def test_unverified_email_links_nobody(backend, plain_user):
+    with pytest.raises(PermissionDenied):
+        sign_in(backend, claims(preferred_username="i.petrov", email_verified=False))
+    assert not KeycloakIdentity.objects.exists()
+    assert User.objects.count() == 1
+
+
+@pytest.mark.django_db
+def test_email_wins_over_the_name(backend, plain_user):
+    other = User.objects.create_user("i.petrov", email="petrov@example.com")
+
+    user = sign_in(
+        backend,
+        claims(
+            preferred_username="i.petrov", email="ivan@example.com", email_verified=True
+        ),
+    )
+
+    assert user == plain_user
+    assert not KeycloakIdentity.objects.filter(user=other).exists()
+
+
+@pytest.mark.django_db
+def test_same_name_with_another_email_is_another_person(backend, plain_user):
+    with pytest.raises(PermissionDenied):
+        sign_in(
+            backend,
+            claims(preferred_username="ivan", email="ivan@corp.example.test"),
+        )
+    assert not KeycloakIdentity.objects.exists()
+
+
+@pytest.mark.django_db
+def test_same_name_without_an_email_here_is_still_linked(backend, plain_user):
+    User.objects.filter(pk=plain_user.pk).update(email="")
+
+    user = sign_in(backend, claims(preferred_username="ivan", email_verified=True))
+
+    assert user == plain_user
+
+
+@pytest.mark.django_db
+def test_admin_is_not_linked_by_email(backend, group_admin):
+    with pytest.raises(PermissionDenied):
+        sign_in(
+            backend,
+            claims(
+                preferred_username="b.oss", email=group_admin.email, email_verified=True
+            ),
+        )
+    assert not KeycloakIdentity.objects.exists()
+    assert User.objects.count() == 1
+
+
+@pytest.mark.django_db
+def test_two_users_with_one_email_are_not_guessed(backend):
+    User.objects.create_user("ivan1", email="ivan@example.com")
+    User.objects.create_user("ivan2", email="Ivan@example.com")
+
+    with pytest.raises(PermissionDenied):
+        sign_in(backend, claims(email_verified=True))
+    assert not KeycloakIdentity.objects.exists()
+
+
 # --- refusals that must not turn into errors ---
 
 

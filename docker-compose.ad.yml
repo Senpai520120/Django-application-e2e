@@ -1,0 +1,45 @@
+# Sign-in with Active Directory accounts, through Keycloak. Laid over SSO:
+#   docker compose -f docker-compose.yml -f docker-compose.sso.yml \
+#     -f docker-compose.ad.yml up -d --build --wait
+# Samba plays the domain controller CORP.EXAMPLE.TEST; Keycloak reads it over
+# LDAPS (User Federation, read only). Roles stay in the app's panel.
+# Test accounts: ad_alice, ad_bob, ad_disabled (disabled), all demo-password-123.
+
+services:
+  samba:
+    build: docker/samba
+    hostname: dc1
+    environment:
+      # Test-only passwords. AD wants three kinds of characters in each.
+      SAMBA_ADMIN_PASSWORD: Samba-admin-123
+      SAMBA_BIND_USER: svc-keycloak
+      SAMBA_BIND_PASSWORD: Bind-secret-123
+      SAMBA_USERS_PASSWORD: demo-password-123
+    volumes:
+      # Samba writes its certificate here, Keycloak reads it to trust LDAPS.
+      - samba-tls:/tls
+    ports:
+      # For the E2E tests, which add and change people in the directory.
+      - "127.0.0.1:6636:636"
+    healthcheck:
+      # /dev/tcp is bash's, not sh's: LDAPS answers once the domain is made.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/636"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  keycloak:
+    environment:
+      # Switch on the "active-directory" provider of keycloak/realm-myapp.json.
+      LDAP_ENABLED: "true"
+      LDAP_BIND_CREDENTIAL: Bind-secret-123
+      KC_TRUSTSTORE_PATHS: /opt/keycloak/samba-tls/samba.pem
+    volumes:
+      - samba-tls:/opt/keycloak/samba-tls:ro
+    depends_on:
+      samba:
+        condition: service_healthy
+
+volumes:
+  samba-tls:

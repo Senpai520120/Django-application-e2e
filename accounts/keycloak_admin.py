@@ -101,6 +101,30 @@ def push_user(user):
     return sub
 
 
+def in_directory(user):
+    """Whether Keycloak finds this user's name or email in Active Directory.
+
+    Keycloak looks the name and the email up in its User Federation too
+    (Active Directory over LDAP) and marks what it found there with a
+    federationLink. Such a person signs in with the AD password and is linked
+    on the first sign-in; a Keycloak account of their own would be a second one.
+    """
+    lookups = [{"username": user.username}]
+    if user.email:
+        lookups.append({"email": user.email})
+    for params in lookups:
+        response = call("get", "/users", params={**params, "exact": "true"})
+        try:
+            accounts = response.json() if response.status_code == 200 else None
+        except ValueError:
+            accounts = None
+        if not isinstance(accounts, list):
+            raise KeycloakUnavailable(f"looking up {params}: {response.status_code}")
+        if any(account.get("federationLink") for account in accounts):
+            return True
+    return False
+
+
 def account_exists(sub):
     """Whether Keycloak still has the account with this id.
 

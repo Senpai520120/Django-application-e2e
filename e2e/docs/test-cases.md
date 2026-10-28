@@ -682,6 +682,74 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 
 **Automated test:** `tests/test_sso.py::test_51_role_given_in_the_panel_survives_the_next_sign_in`
 
+## TC-52. AD person signs in with the AD password
+
+**Preconditions:** AD stack (docker-compose.ad.yml). The test adds a person to AD
+
+**Steps:**
+
+1. Add a person to AD
+2. Sign in as them with the AD password
+3. Open /manage/
+
+**Expected result:** The app shows their username and the role "user". /manage/ answers 403.
+
+**Automated test:** `tests/test_ad.py::test_52_ad_person_signs_in_with_the_ad_password`
+
+## TC-53. AD email works as the username
+
+**Preconditions:** AD stack (docker-compose.ad.yml). The test adds a person to AD
+
+**Steps:**
+
+1. Add a person with an email to AD
+2. On the Keycloak form type the email instead of the username
+
+**Expected result:** The app shows the person's AD username.
+
+**Automated test:** `tests/test_ad.py::test_53_ad_person_signs_in_with_the_email`
+
+## TC-54. Account switched off in AD cannot sign in
+
+**Preconditions:** AD stack (docker-compose.ad.yml). The test adds a person to AD
+
+**Steps:**
+
+1. Add a person to AD and disable the account there
+2. Sign in as them with the right password
+
+**Expected result:** Keycloak shows an error and the app stays closed.
+
+**Automated test:** `tests/test_ad.py::test_54_account_switched_off_in_ad_cannot_sign_in`
+
+## TC-55. Password set in AD works at once
+
+**Preconditions:** AD stack (docker-compose.ad.yml). The test adds a person to AD
+
+**Steps:**
+
+1. Add a person to AD
+2. Reset their password in AD
+3. Sign in with the old password
+4. Sign in with the new password
+
+**Expected result:** The old password is refused; the new one lets the person in.
+
+**Automated test:** `tests/test_ad.py::test_55_password_set_in_ad_works_at_once`
+
+## TC-56. User made in the panel is found by the AD email
+
+**Preconditions:** AD stack (docker-compose.ad.yml). The test adds a person to AD with an email
+
+**Steps:**
+
+1. As admin, create a user in the panel with another username and the same email
+2. Sign in as the AD person
+
+**Expected result:** The panel says the person is in Active Directory. The AD sign-in lands in the user made in the panel.
+
+**Automated test:** `tests/test_ad.py::test_56_user_made_in_the_panel_is_found_by_the_ad_email`
+
 ## TC-57. Another user signs in after sign-out
 
 **Preconditions:** SSO stack (docker-compose.sso.yml)

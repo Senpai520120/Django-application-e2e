@@ -578,6 +578,64 @@
     "autotest": "tests/test_sso.py::test_51_role_given_in_the_panel_survives_the_next_sign_in"
   },
   {
+    "id": "TC-52",
+    "title": "AD person signs in with the AD password",
+    "preconditions": "AD stack (docker-compose.ad.yml). The test adds a person to AD",
+    "steps": [
+      "Add a person to AD",
+      "Sign in as them with the AD password",
+      "Open /manage/"
+    ],
+    "expected": "The app shows their username and the role \"user\". /manage/ answers 403.",
+    "autotest": "tests/test_ad.py::test_52_ad_person_signs_in_with_the_ad_password"
+  },
+  {
+    "id": "TC-53",
+    "title": "AD email works as the username",
+    "preconditions": "AD stack (docker-compose.ad.yml). The test adds a person to AD",
+    "steps": [
+      "Add a person with an email to AD",
+      "On the Keycloak form type the email instead of the username"
+    ],
+    "expected": "The app shows the person's AD username.",
+    "autotest": "tests/test_ad.py::test_53_ad_person_signs_in_with_the_email"
+  },
+  {
+    "id": "TC-54",
+    "title": "Account switched off in AD cannot sign in",
+    "preconditions": "AD stack (docker-compose.ad.yml). The test adds a person to AD",
+    "steps": [
+      "Add a person to AD and disable the account there",
+      "Sign in as them with the right password"
+    ],
+    "expected": "Keycloak shows an error and the app stays closed.",
+    "autotest": "tests/test_ad.py::test_54_account_switched_off_in_ad_cannot_sign_in"
+  },
+  {
+    "id": "TC-55",
+    "title": "Password set in AD works at once",
+    "preconditions": "AD stack (docker-compose.ad.yml). The test adds a person to AD",
+    "steps": [
+      "Add a person to AD",
+      "Reset their password in AD",
+      "Sign in with the old password",
+      "Sign in with the new password"
+    ],
+    "expected": "The old password is refused; the new one lets the person in.",
+    "autotest": "tests/test_ad.py::test_55_password_set_in_ad_works_at_once"
+  },
+  {
+    "id": "TC-56",
+    "title": "User made in the panel is found by the AD email",
+    "preconditions": "AD stack (docker-compose.ad.yml). The test adds a person to AD with an email",
+    "steps": [
+      "As admin, create a user in the panel with another username and the same email",
+      "Sign in as the AD person"
+    ],
+    "expected": "The panel says the person is in Active Directory. The AD sign-in lands in the user made in the panel.",
+    "autotest": "tests/test_ad.py::test_56_user_made_in_the_panel_is_found_by_the_ad_email"
+  },
+  {
     "id": "TC-57",
     "title": "Another user signs in after sign-out",
     "preconditions": "SSO stack (docker-compose.sso.yml)",

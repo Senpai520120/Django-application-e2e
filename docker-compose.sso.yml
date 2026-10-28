@@ -20,6 +20,12 @@ services:
       - ./keycloak:/opt/keycloak/data/import:ro
     ports:
       - "127.0.0.1:8080:8080"
+    networks:
+      default:
+      # Other apps of the same realm (AUTOforYOU) join this network to reach
+      # Keycloak at http://keycloak:8080 for tokens; see README.
+      sso:
+        aliases: [keycloak]
     healthcheck:
       # The image has no curl: ask the management port with bash alone.
       test:
@@ -56,3 +62,7 @@ services:
     depends_on:
       keycloak:
         condition: service_healthy
+
+networks:
+  sso:
+    name: sso-shared

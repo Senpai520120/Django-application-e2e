@@ -10,7 +10,7 @@ from config import User
 from pages.keycloak_login_page import KeycloakLoginPage
 from pages.login_page import LoginPage
 
-# With SSO (E2E_AUTH=keycloak) these tests have nothing to check:
+# With SSO (E2E_AUTH=keycloak or ad) these tests have nothing to check:
 # tests/test_sso.py checks the same things on the Keycloak side.
 local_sign_in_only = pytest.mark.skipif(
     config.SSO, reason="checks the app's own sign-in form, not used with SSO"

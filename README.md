@@ -354,8 +354,11 @@ the first sign-in.
 **How a Keycloak account finds its Django user.** By Keycloak's permanent id
 (`sub`), kept in `accounts.KeycloakIdentity`, so renaming an account in
 Keycloak changes nothing in the app. On the very first sign-in an existing
-Django user with the same username (case aside) is linked, which is how the
-`demo_*` accounts become the same people on both sides. Never linked by name:
+Django user is linked: first by email, when Keycloak vouches for it
+(`email_verified`, as for everyone from Active Directory), then by the same
+username (case aside), which is how the `demo_*` accounts become the same
+people on both sides. The same name with another email is another person and
+is refused. Never linked by name or email:
 a user already linked to another Keycloak account, and anybody with admin
 rights (the `admin` role, staff, superusers), since whoever first signed in
 under that name would get those rights. Admins are linked by hand with the
@@ -413,6 +416,56 @@ inside docker); outside docker both are the same and only the first is needed.
 E2E in this mode: `E2E_AUTH=keycloak pytest e2e`. The fixtures sign in through
 the Keycloak form, tests of the app's own form are skipped, and
 `e2e/tests/test_sso.py` runs (TC-44…51).
+
+**One person, one email.** The realm lets no two accounts share an email
+(`duplicateEmailsAllowed: false`), and the email works as the username on the
+form. Other apps of the realm can rely on it to find their own users: the
+realm also has the `autoforyou` client, and its containers reach Keycloak at
+`http://keycloak:8080` through the shared docker network `sso-shared`.
+
+## Active Directory through Keycloak
+
+`docker-compose.ad.yml`, laid over SSO, adds a test domain controller (Samba,
+domain `CORP.EXAMPLE.TEST`) and switches on the `active-directory` provider of
+the realm (Keycloak's User Federation over LDAPS, read only):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.sso.yml   -f docker-compose.ad.yml up -d --build --wait
+```
+
+The first start makes the domain and takes about a minute.
+
+- **AD decides who you are.** Keycloak checks the password against AD on every
+  sign-in: a password reset or an account disabled in AD counts at once. People
+  and passwords are managed in AD only; Keycloak and the app do not write there.
+- **The app decides what you may do**, as with plain SSO: roles in `/manage/`.
+  Someone from AD gets the `user` role on the first sign-in.
+- **No second account for people in AD.** `push_users_to_keycloak` and "New
+  user" in the panel ask Keycloak first: a username or email it finds in AD
+  gets no Keycloak account of its own. The panel still makes the Django user
+  (give them roles ahead) and says they are in Active Directory; their first
+  AD sign-in lands in that user, found by email, or by the username.
+- **TLS.** Samba makes a certificate for the name `samba` on its first start
+  and keeps it in the `samba-tls` volume; Keycloak trusts exactly that one
+  (`KC_TRUSTSTORE_PATHS`). In production give Keycloak the CA of the real
+  domain controllers instead.
+
+Test accounts (password `demo-password-123`): `ad_alice`, `ad_bob`, and
+`ad_disabled`, which is disabled in AD. Domain administrator:
+`Administrator` / `Samba-admin-123`; Keycloak reads AD as `svc-keycloak`.
+All of them are for this test domain only. LDAPS is published on
+`127.0.0.1:6636` for the tests.
+
+Two things that differ from a real domain on purpose: the domain lives in the
+container and is made again after `down` (people get new ids then, and with
+`KEYCLOAK_REMAKE_LOST_ACCOUNTS` the app drops the old links so the next
+sign-in links them again), and the old password stops working at once after
+a change (AD normally allows it for another hour: `old password allowed
+period`).
+
+E2E in this mode: `E2E_AUTH=ad pytest e2e`: everything of the SSO mode plus
+`e2e/tests/test_ad.py` (TC-52…56), which adds people to AD over LDAPS as the
+domain administrator would (`e2e/directory.py`).
 
 ## E2E tests (Playwright)
 

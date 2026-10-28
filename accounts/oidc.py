@@ -48,24 +48,42 @@ class KeycloakBackend(OIDCAuthenticationBackend):
         linked = self.UserModel.objects.filter(keycloak_identity__sub=claims["sub"])
         if linked.exists():
             return linked
-        # First sign-in of somebody the app already knows (demo_user and the
-        # rest): the same username. Keycloak lowercases it, so case is ignored,
-        # unless the very same spelling exists. Never an account already linked
-        # to another Keycloak account, and never one with admin rights in the
-        # panel or /admin/: those are linked with `manage.py link_keycloak_user`.
+        # First sign-in of somebody the app already knows. Never an account
+        # already linked to another Keycloak account, and never one with admin
+        # rights in the panel or /admin/: those are linked with
+        # `manage.py link_keycloak_user`.
         candidates = self.UserModel.objects.filter(
             keycloak_identity__isnull=True,
             is_staff=False,
             is_superuser=False,
         ).exclude(groups__name=ADMIN_GROUP_NAME)
         username = claims["preferred_username"]
-        exact = candidates.filter(username=username)
-        if exact.exists():
-            return exact
-        found = candidates.filter(username__iexact=username)
-        if found.count() > 1:
-            # "IVAN" and "Ivan" for Keycloak's "ivan": which one is a guess.
-            logger.warning("Keycloak sign-in refused: %s is ambiguous", username)
+        email = verified_email(claims)
+
+        # One person, one email: Keycloak lets no two accounts share one. An
+        # address Keycloak vouches for (from Active Directory, for one) finds
+        # the user whatever the name: "i.petrov" in AD, "ivan" made here.
+        if email:
+            by_email = candidates.filter(email__iexact=email)
+            if by_email.count() > 1:
+                logger.warning("Keycloak sign-in refused: %s is ambiguous", email)
+                raise PermissionDenied
+            if by_email.exists():
+                return by_email
+
+        # Then the same username (demo_user and the rest). Keycloak lowercases
+        # it, so case is ignored, unless the very same spelling exists.
+        found = candidates.filter(username=username)
+        if not found.exists():
+            found = candidates.filter(username__iexact=username)
+            if found.count() > 1:
+                # "IVAN" and "Ivan" for Keycloak's "ivan": which one is a guess.
+                logger.warning("Keycloak sign-in refused: %s is ambiguous", username)
+                raise PermissionDenied
+        claimed = claims.get("email") or ""
+        if claimed and found.exclude(email="").exclude(email__iexact=claimed):
+            # The same name with another address is another person.
+            logger.warning("Keycloak sign-in refused: %s has another email", username)
             raise PermissionDenied
         return found
 
@@ -74,6 +92,11 @@ class KeycloakBackend(OIDCAuthenticationBackend):
         if self.UserModel.objects.filter(username__iexact=username).exists():
             # Taken by an account filter_users_by_claims may not link.
             logger.warning("Keycloak sign-in refused: username %s is taken", username)
+            raise PermissionDenied
+        email = claims.get("email")
+        if email and self.UserModel.objects.filter(email__iexact=email).exists():
+            # The address belongs to a user filter_users_by_claims may not link.
+            logger.warning("Keycloak sign-in refused: email of %s is taken", username)
             raise PermissionDenied
         try:
             with transaction.atomic():
@@ -115,6 +138,13 @@ class KeycloakBackend(OIDCAuthenticationBackend):
         # a user switched off in the panel loses the session at once.
         user = super().get_user(user_id)
         return user if user is not None and user.is_active else None
+
+
+def verified_email(claims):
+    """The email, if Keycloak says it belongs to the person; otherwise ""."""
+    if claims.get("email_verified") is True:
+        return claims.get("email") or ""
+    return ""
 
 
 def fit(value, user, field, cut=True):

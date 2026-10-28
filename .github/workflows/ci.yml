@@ -273,6 +273,20 @@ jobs:
           E2E_MAX_FILE_SIZE: "5242880"
         run: pytest e2e --output=test-results/sso
 
+      # Active Directory behind Keycloak: Samba plays the domain controller.
+      # The same scenarios plus tests/test_ad.py, which add people to AD.
+      - name: Restart the stack in Active Directory mode
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.sso.yml down -v
+          docker compose -f docker-compose.yml -f docker-compose.sso.yml             -f docker-compose.ad.yml up -d --build --wait
+
+      - name: Run E2E (Active Directory)
+        env:
+          BASE_URL: http://127.0.0.1:8000
+          E2E_AUTH: ad
+          E2E_MAX_FILE_SIZE: "5242880"
+        run: pytest e2e --output=test-results/ad
+
       - name: Traces, screenshots and videos of failed tests
         if: failure()
         uses: actions/upload-artifact@v7
@@ -283,11 +297,11 @@ jobs:
 
       - name: Container logs
         if: failure()
-        run: docker compose -f docker-compose.yml -f docker-compose.sso.yml logs
+        run: docker compose -f docker-compose.yml -f docker-compose.sso.yml -f docker-compose.ad.yml logs
 
       - name: Shut the stack down
         if: always()
-        run: docker compose -f docker-compose.yml -f docker-compose.sso.yml down -v --remove-orphans
+        run: docker compose -f docker-compose.yml -f docker-compose.sso.yml -f docker-compose.ad.yml down -v --remove-orphans
 
   publish:
     name: Publish the image to GHCR
