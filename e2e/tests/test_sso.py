@@ -6,12 +6,13 @@ app's panel. These tests check both halves.
 """
 
 import re
+from urllib.parse import urlparse
 
 import pytest
 from playwright.sync_api import Page, expect
 
 import config
-from helpers import sign_in
+from helpers import sign_in, unique_name
 from pages.home_page import HomePage
 from pages.keycloak_login_page import KeycloakLoginPage
 from pages.user_roles_page import UserRolesPage
@@ -145,3 +146,78 @@ def test_51_role_given_in_the_panel_survives_the_next_sign_in(
     expect(HomePage(promoted_user_page).open().role_badge("admin")).to_be_visible()
     response = promoted_user_page.goto("/manage/")
     assert response is not None and response.status == 200
+
+
+def test_57_another_user_signs_in_after_sign_out(page: Page):
+    """TC-57: after signing out, the next person signs in as themselves,
+    not as the one before."""
+    sign_in(page, config.REGULAR_USER)
+    HomePage(page).open().sign_out()
+
+    sign_in(page, config.ADMIN)
+
+    home_page = HomePage(page).open()
+    expect(home_page.heading).to_have_text(
+        f"You are signed in as {config.ADMIN.username}"
+    )
+    expect(home_page.role_badge("admin")).to_be_visible()
+
+
+def test_58_account_unknown_to_keycloak_cannot_sign_in(page: Page, admin_browser: Page):
+    """TC-58: Keycloak refuses an account it does not have, and the app
+    makes no user for it."""
+    username = unique_name("nobody")
+    page.goto("/")
+    keycloak = KeycloakLoginPage(page)
+
+    keycloak.sign_in(username, config.DEMO_PASSWORD)
+
+    expect(keycloak.error_message).to_be_visible()
+    expect(page).to_have_url(keycloak.url_pattern)
+    users_page = UsersPage(admin_browser).open()
+    users_page.search(username)
+    expect(users_page.nothing_found).to_be_visible()
+
+
+def test_59_cookies_of_another_app_on_localhost_do_not_break_sign_out(
+    page: Page, base_url: str
+):
+    """TC-59: another Django app on localhost (AUTOforYOU) keeps its own
+    csrftoken and sessionid there. Cookies are not kept apart by port, so
+    they reach the app too. Sign-in and sign-out still work, and the other
+    app's cookies stay as they were."""
+    app_url = base_url.replace("127.0.0.1", "localhost")
+    assert urlparse(app_url).hostname == "localhost", "the app must answer on localhost"
+
+    def other_app_writes_cookies(value: str) -> None:
+        page.context.add_cookies(
+            [
+                {"name": name, "value": value, "url": app_url}
+                for name in ("csrftoken", "sessionid")
+            ]
+        )
+
+    other_app_writes_cookies("a" * 32)
+    page.goto(f"{app_url}/")
+    KeycloakLoginPage(page).sign_in(
+        config.REGULAR_USER.username, config.REGULAR_USER.password
+    )
+    home_page = HomePage(page)
+    expect(home_page.heading).to_have_text(
+        f"You are signed in as {config.REGULAR_USER.username}"
+    )
+    # The other app is used in another tab while ours stays open.
+    other_app_writes_cookies("b" * 32)
+
+    home_page.sign_out()
+
+    expect(page.get_by_text("CSRF verification failed")).to_have_count(0)
+    keycloak = KeycloakLoginPage(page)
+    expect(page).to_have_url(keycloak.url_pattern)
+    expect(keycloak.sign_in_button).to_be_visible()
+    others = {
+        c.get("name"): c.get("value")
+        for c in page.context.cookies(app_url)
+        if c.get("name") in ("csrftoken", "sessionid")
+    }
+    assert others == {"csrftoken": "b" * 32, "sessionid": "b" * 32}

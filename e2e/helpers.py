@@ -16,6 +16,10 @@ local_sign_in_only = pytest.mark.skipif(
     config.SSO, reason="checks the app's own sign-in form, not used with SSO"
 )
 
+# CSRF_COOKIE_NAME of the app (config/settings.py): not Django's "csrftoken",
+# so another Django app on the same host does not overwrite it.
+CSRF_COOKIE = "users_roles_csrftoken"
+
 
 def unique_name(prefix: str) -> str:
     """A name no other test run will use, for example "e2e_folder_3f9a1c2b".
@@ -61,7 +65,7 @@ def send_form(page: Page, path: str, data: dict) -> APIResponse:
     """
     cookies = page.context.cookies()
     csrf_token = next(
-        (c.get("value") for c in cookies if c.get("name") == "csrftoken"), None
+        (c.get("value") for c in cookies if c.get("name") == CSRF_COOKIE), None
     )
-    assert csrf_token, "no csrftoken cookie: open a page with a form first"
+    assert csrf_token, f"no {CSRF_COOKIE} cookie: open a page with a form first"
     return page.request.post(path, form={"csrfmiddlewaretoken": csrf_token, **data})

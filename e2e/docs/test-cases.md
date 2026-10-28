@@ -681,3 +681,45 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 **Expected result:** The home page lists the role "admin". /manage/ opens.
 
 **Automated test:** `tests/test_sso.py::test_51_role_given_in_the_panel_survives_the_next_sign_in`
+
+## TC-57. Another user signs in after sign-out
+
+**Preconditions:** SSO stack (docker-compose.sso.yml)
+
+**Steps:**
+
+1. Sign in through Keycloak as demo_user
+2. Sign out
+3. Sign in through Keycloak as demo_admin
+
+**Expected result:** The app shows demo_admin with the role "admin", not demo_user.
+
+**Automated test:** `tests/test_sso.py::test_57_another_user_signs_in_after_sign_out`
+
+## TC-58. Account unknown to Keycloak cannot sign in
+
+**Preconditions:** SSO stack (docker-compose.sso.yml)
+
+**Steps:**
+
+1. Open /
+2. In the Keycloak form enter a username Keycloak does not have
+3. As admin, search for that username in the panel
+
+**Expected result:** Keycloak shows "Invalid username or password." and stays on its form. The panel finds nothing.
+
+**Automated test:** `tests/test_sso.py::test_58_account_unknown_to_keycloak_cannot_sign_in`
+
+## TC-59. Cookies of another app on localhost do not break sign-out
+
+**Preconditions:** SSO stack (docker-compose.sso.yml). The app is opened at localhost:8000; the browser has another app's csrftoken and sessionid for localhost
+
+**Steps:**
+
+1. Sign in through Keycloak as demo_user
+2. The other app writes new csrftoken and sessionid
+3. Press Sign out
+
+**Expected result:** No CSRF 403: the Keycloak form is shown. The other app's cookies keep their values.
+
+**Automated test:** `tests/test_sso.py::test_59_cookies_of_another_app_on_localhost_do_not_break_sign_out`

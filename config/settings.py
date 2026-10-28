@@ -255,6 +255,11 @@ if env.bool("USE_X_FORWARDED_PROTO", default=False):
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 SESSION_COOKIE_HTTPONLY = True
+# Cookies are not kept apart by port: another Django app on localhost
+# (AUTOforYOU) writes its own csrftoken and sessionid over ours, and then
+# every form, Sign out too, fails with CSRF 403. Our own names keep them apart.
+SESSION_COOKIE_NAME = "users_roles_sessionid"
+CSRF_COOKIE_NAME = "users_roles_csrftoken"
 X_FRAME_OPTIONS = "DENY"
 SECURE_CONTENT_TYPE_NOSNIFF = True
 
