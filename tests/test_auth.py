@@ -5,6 +5,7 @@ from django.contrib.auth import SESSION_KEY
 from django.contrib.auth.hashers import check_password
 from django.contrib.auth.models import User
 from django.db import connection
+from django.test import Client
 from django.urls import reverse
 
 
@@ -92,6 +93,25 @@ def test_logout_clears_session(client, plain_user):
     assert response.status_code == 302
     assert response.url == reverse("login")
     assert SESSION_KEY not in client.session
+
+
+@pytest.mark.django_db
+def test_cookies_of_another_django_app_do_not_break_logout(settings, plain_user):
+    """Another Django app on the same host (AUTOforYOU on localhost) keeps its
+    csrftoken and sessionid there. They must not replace ours."""
+    assert settings.SESSION_COOKIE_NAME != "sessionid"
+    assert settings.CSRF_COOKIE_NAME != "csrftoken"
+    csrf_client = Client(enforce_csrf_checks=True)
+    csrf_client.force_login(plain_user)
+    csrf_client.get(reverse("home"))
+    token = csrf_client.cookies[settings.CSRF_COOKIE_NAME].value
+    csrf_client.cookies["csrftoken"] = "x" * 32
+    csrf_client.cookies["sessionid"] = "someone-elses-session"
+
+    response = csrf_client.post(reverse("logout"), {"csrfmiddlewaretoken": token})
+
+    assert response.status_code == 302
+    assert SESSION_KEY not in csrf_client.session
 
 
 @pytest.mark.django_db

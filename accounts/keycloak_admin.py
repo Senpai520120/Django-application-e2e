@@ -101,6 +101,53 @@ def push_user(user):
     return sub
 
 
+def push_password(user):
+    """Give the user's Keycloak account the password just set in Django.
+
+    Otherwise the old password keeps working on the Keycloak form, the only
+    way in with SSO on. Returns False when there is nothing to send to: no
+    linked account yet (it gets the password when it is made), an account
+    Keycloak has lost (push_users_to_keycloak makes it again with this very
+    password), or a password Keycloak cannot take.
+    """
+    link = KeycloakIdentity.objects.filter(user=user).first()
+    credential = credential_from_hash(user.password)
+    if link is None or credential is None:
+        return False
+    response = call("put", f"/users/{link.sub}", json={"credentials": [credential]})
+    if response.status_code == 404:
+        return False
+    if response.status_code != 204:
+        raise KeycloakUnavailable(
+            f"password of {user.username}: {response.status_code}"
+        )
+    return True
+
+
+def in_directory(user):
+    """Whether Keycloak finds this user's name or email in Active Directory.
+
+    Keycloak looks the name and the email up in its User Federation too
+    (Active Directory over LDAP) and marks what it found there with a
+    federationLink. Such a person signs in with the AD password and is linked
+    on the first sign-in; a Keycloak account of their own would be a second one.
+    """
+    lookups = [{"username": user.username}]
+    if user.email:
+        lookups.append({"email": user.email})
+    for params in lookups:
+        response = call("get", "/users", params={**params, "exact": "true"})
+        try:
+            accounts = response.json() if response.status_code == 200 else None
+        except ValueError:
+            accounts = None
+        if not isinstance(accounts, list):
+            raise KeycloakUnavailable(f"looking up {params}: {response.status_code}")
+        if any(account.get("federationLink") for account in accounts):
+            return True
+    return False
+
+
 def account_exists(sub):
     """Whether Keycloak still has the account with this id.
 

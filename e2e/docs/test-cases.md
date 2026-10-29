@@ -4,6 +4,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 
 ## TC-01. Anonymous user is sent to the sign-in page
 
+**Assignment:** #14 Users & Roles
+
 **Preconditions:** Not signed in
 
 **Steps:**
@@ -15,6 +17,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 **Automated test:** `tests/test_login.py::test_01_anonymous_user_is_sent_to_sign_in`
 
 ## TC-02. User signs in with valid credentials
+
+**Assignment:** #14 Users & Roles
 
 **Preconditions:** Not signed in. Account demo_user / demo-password-123 exists
 
@@ -30,6 +34,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 
 ## TC-03. Sign-in with a wrong password is rejected
 
+**Assignment:** #14 Users & Roles
+
 **Preconditions:** Not signed in
 
 **Steps:**
@@ -44,6 +50,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 
 ## TC-04. Unknown username gets the same error as a wrong password
 
+**Assignment:** #14 Users & Roles
+
 **Preconditions:** Not signed in
 
 **Steps:**
@@ -56,6 +64,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 **Automated test:** `tests/test_login.py::test_04_unknown_username_gets_the_same_error`
 
 ## TC-05. Deactivated user cannot sign in
+
+**Assignment:** #14 Users & Roles
 
 **Preconditions:** Not signed in. Account demo_inactive is switched off
 
@@ -71,6 +81,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 
 ## TC-06. User signs out
 
+**Assignment:** #14 Users & Roles
+
 **Preconditions:** Signed in as demo_user
 
 **Steps:**
@@ -83,6 +95,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 **Automated test:** `tests/test_login.py::test_06_user_signs_out`
 
 ## TC-07. Header link "Files" opens the file manager
+
+**Assignment:** #22 File manager
 
 **Preconditions:** Signed in as demo_user
 
@@ -97,6 +111,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 
 ## TC-08. Regular user gets "access denied" on the admin panel
 
+**Assignment:** #14 Users & Roles
+
 **Preconditions:** Signed in as demo_user (no admin role)
 
 **Steps:**
@@ -109,6 +125,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 
 ## TC-09. Admin opens the admin panel
 
+**Assignment:** #14 Users & Roles
+
 **Preconditions:** Signed in as demo_admin
 
 **Steps:**
@@ -120,6 +138,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 **Automated test:** `tests/test_access.py::test_09_admin_opens_admin_panel`
 
 ## TC-10. Regular user does not see admin links in the header
+
+**Assignment:** #14 Users & Roles
 
 **Preconditions:** Signed in as demo_user
 
@@ -134,6 +154,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 
 ## TC-11. Anonymous user cannot open the file manager
 
+**Assignment:** #22 File manager
+
 **Preconditions:** Not signed in
 
 **Steps:**
@@ -145,6 +167,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 **Automated test:** `tests/test_access.py::test_11_anonymous_user_cannot_open_file_manager`
 
 ## TC-12. Admin finds a user by search
+
+**Assignment:** #14 Users & Roles
 
 **Preconditions:** Signed in as demo_admin. Demo users demo_user01…demo_user10 exist
 
@@ -159,6 +183,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 **Automated test:** `tests/test_users.py::test_12_admin_finds_user_by_search`
 
 ## TC-13. Admin creates a new user
+
+**Assignment:** #14 Users & Roles
 
 **Preconditions:** Signed in as demo_admin
 
@@ -175,6 +201,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 
 ## TC-14. New user can sign in
 
+**Assignment:** #14 Users & Roles
+
 **Preconditions:** An admin has created a new user with a known password
 
 **Steps:**
@@ -188,6 +216,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 **Automated test:** `tests/test_users.py::test_14_new_user_can_sign_in`
 
 ## TC-15. Password made only of digits is rejected
+
+**Assignment:** #14 Users & Roles
 
 **Preconditions:** Signed in as demo_admin
 
@@ -204,6 +234,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 
 ## TC-16. Deactivated user cannot sign in any more
 
+**Assignment:** #14 Users & Roles
+
 **Preconditions:** Signed in as demo_admin. A new active user exists
 
 **Steps:**
@@ -217,6 +249,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 **Automated test:** `tests/test_users.py::test_16_deactivated_user_cannot_sign_in`
 
 ## TC-17. Admin grants the admin role
+
+**Assignment:** #14 Users & Roles
 
 **Preconditions:** Signed in as demo_admin. A new user without roles exists
 
@@ -232,6 +266,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 
 ## TC-18. Admin revokes a role
 
+**Assignment:** #14 Users & Roles
+
 **Preconditions:** Signed in as demo_admin. A new user with the "user" role exists
 
 **Steps:**
@@ -245,6 +281,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 **Automated test:** `tests/test_roles.py::test_18_admin_revokes_role`
 
 ## TC-19. Cancel on the roles form changes nothing
+
+**Assignment:** #14 Users & Roles
 
 **Preconditions:** Signed in as demo_admin. A new user without roles exists
 
@@ -260,6 +298,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 
 ## TC-20. Admin cannot remove the admin role from themselves
 
+**Assignment:** #14 Users & Roles
+
 **Preconditions:** Signed in as demo_admin
 
 **Steps:**
@@ -274,6 +314,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 
 ## TC-21. Role change is written to the audit log
 
+**Assignment:** #14 Users & Roles
+
 **Preconditions:** Signed in as demo_admin. A new user without roles exists
 
 **Steps:**
@@ -286,6 +328,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 **Automated test:** `tests/test_roles.py::test_21_role_change_is_written_to_audit_log`
 
 ## TC-22. Roles page counts a new member
+
+**Assignment:** #14 Users & Roles
 
 **Preconditions:** Signed in as demo_admin. A new user without roles exists
 
@@ -300,6 +344,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 **Automated test:** `tests/test_roles.py::test_22_roles_page_counts_new_member`
 
 ## TC-23. Create a nested folder and come back by breadcrumbs
+
+**Assignment:** #22 File manager
 
 **Preconditions:** Signed in. An empty working folder is open in /files/
 
@@ -316,6 +362,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 
 ## TC-24. Folder with a taken name is not created twice
 
+**Assignment:** #22 File manager
+
 **Preconditions:** Signed in. An empty working folder is open in /files/
 
 **Steps:**
@@ -328,6 +376,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 **Automated test:** `tests/test_folders.py::test_24_folder_with_taken_name_is_not_created_twice`
 
 ## TC-25. Cancelling folder deletion keeps the folder
+
+**Assignment:** #22 File manager
 
 **Preconditions:** Signed in. An empty working folder is open in /files/
 
@@ -343,6 +393,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 
 ## TC-26. Deleting a folder removes it with its contents
 
+**Assignment:** #22 File manager
+
 **Preconditions:** Signed in. An empty working folder is open in /files/
 
 **Steps:**
@@ -356,6 +408,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 **Automated test:** `tests/test_folders.py::test_26_deleting_folder_removes_its_contents`
 
 ## TC-27. Rename a folder
+
+**Assignment:** #22 File manager
 
 **Preconditions:** Signed in. An empty working folder is open in /files/
 
@@ -371,6 +425,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 
 ## TC-28. Upload a file with a Cyrillic name
 
+**Assignment:** #22 File manager
+
 **Preconditions:** Signed in. An empty working folder is open in /files/
 
 **Steps:**
@@ -383,6 +439,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 **Automated test:** `tests/test_files.py::test_28_upload_file_with_cyrillic_name`
 
 ## TC-29. Upload several files at once
+
+**Assignment:** #22 File manager
 
 **Preconditions:** Signed in. An empty working folder is open in /files/
 
@@ -397,6 +455,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 
 ## TC-30. Download returns the same file
 
+**Assignment:** #22 File manager
+
 **Preconditions:** Signed in. A file with known content is uploaded to the working folder
 
 **Steps:**
@@ -408,6 +468,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 **Automated test:** `tests/test_files.py::test_30_download_returns_same_file`
 
 ## TC-31. Rename a file
+
+**Assignment:** #22 File manager
 
 **Preconditions:** Signed in. A file is uploaded to the working folder
 
@@ -422,6 +484,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 
 ## TC-32. Delete a file after confirmation
 
+**Assignment:** #22 File manager
+
 **Preconditions:** Signed in. A file is uploaded to the working folder
 
 **Steps:**
@@ -435,6 +499,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 
 ## TC-33. File one byte over the size limit is rejected
 
+**Assignment:** #22 File manager
+
 **Preconditions:** Signed in. An empty working folder is open in /files/. The size limit is known (5 MB in docker-compose)
 
 **Steps:**
@@ -447,6 +513,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 **Automated test:** `tests/test_files.py::test_33_file_over_size_limit_is_rejected`
 
 ## TC-34. File with a taken name is not overwritten
+
+**Assignment:** #22 File manager
 
 **Preconditions:** Signed in. An empty working folder is open in /files/
 
@@ -462,6 +530,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 
 ## TC-35. Regular user cannot change roles by a direct request
 
+**Assignment:** #14 Users & Roles
+
 **Preconditions:** Signed in as demo_user (no admin role). The roles form is hidden from this user
 
 **Steps:**
@@ -474,6 +544,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 
 ## TC-36. Regular user cannot switch a user off by a direct request
 
+**Assignment:** #14 Users & Roles
+
 **Preconditions:** Signed in as demo_user. Another active user exists
 
 **Steps:**
@@ -485,6 +557,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 **Automated test:** `tests/test_access.py::test_36_regular_user_cannot_deactivate_user_by_direct_request`
 
 ## TC-37. Admin cannot switch off their own account
+
+**Assignment:** #14 Users & Roles
 
 **Preconditions:** Signed in as demo_admin
 
@@ -499,6 +573,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 
 ## TC-38. Signed-in user loses access as soon as they are switched off
 
+**Assignment:** #14 Users & Roles
+
 **Preconditions:** A user is signed in in one browser. An admin is signed in in another browser
 
 **Steps:**
@@ -512,6 +588,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 
 ## TC-39. Revoking a role is written to the audit log
 
+**Assignment:** #14 Users & Roles
+
 **Preconditions:** Signed in as demo_admin. A user with the "user" role exists
 
 **Steps:**
@@ -523,20 +601,9 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 
 **Automated test:** `tests/test_roles.py::test_39_role_revoke_is_written_to_audit_log`
 
-## TC-40. Switching a user off is written to the audit log
-
-**Preconditions:** Signed in as demo_admin. An active user exists
-
-**Steps:**
-
-1. Click "Deactivate" for the user
-2. Open /manage/audit/
-
-**Expected result:** The newest record is about this user. Known bug #142: the app does not record this yet; the test is marked xfail.
-
-**Automated test:** `tests/test_roles.py::test_40_user_deactivation_is_written_to_audit_log`
-
 ## TC-41. File exactly at the size limit is accepted
+
+**Assignment:** #22 File manager
 
 **Preconditions:** Signed in. An empty working folder is open in /files/. The size limit is known (5 MB in docker-compose)
 
@@ -551,6 +618,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 
 ## TC-42. Path that climbs out of the storage is refused
 
+**Assignment:** #22 File manager
+
 **Preconditions:** Signed in as demo_user
 
 **Steps:**
@@ -562,6 +631,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 **Automated test:** `tests/test_files.py::test_42_path_outside_storage_is_refused`
 
 ## TC-43. Sign-in does not send the user to another site
+
+**Assignment:** #14 Users & Roles
 
 **Preconditions:** Not signed in
 
@@ -576,6 +647,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 
 ## TC-44. Anonymous user is sent to Keycloak and comes back
 
+**Assignment:** #31 Keycloak SSO
+
 **Preconditions:** SSO stack (docker-compose.sso.yml). Not signed in
 
 **Steps:**
@@ -588,6 +661,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 **Automated test:** `tests/test_sso.py::test_44_anonymous_user_is_sent_to_keycloak_and_back`
 
 ## TC-45. Keycloak session signs in to the app (SSO)
+
+**Assignment:** #31 Keycloak SSO
 
 **Preconditions:** SSO stack (docker-compose.sso.yml). Not signed in
 
@@ -603,6 +678,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 
 ## TC-46. Signing out of the app ends the Keycloak session
 
+**Assignment:** #31 Keycloak SSO
+
 **Preconditions:** SSO stack (docker-compose.sso.yml). Signed in as demo_user
 
 **Steps:**
@@ -617,6 +694,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 
 ## TC-47. Keycloak rejects a wrong password
 
+**Assignment:** #31 Keycloak SSO
+
 **Preconditions:** SSO stack (docker-compose.sso.yml). Not signed in
 
 **Steps:**
@@ -630,6 +709,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 
 ## TC-48. Account switched off in Keycloak cannot sign in
 
+**Assignment:** #31 Keycloak SSO
+
 **Preconditions:** SSO stack (docker-compose.sso.yml). kc_disabled is disabled in Keycloak
 
 **Steps:**
@@ -642,6 +723,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 **Automated test:** `tests/test_sso.py::test_48_account_disabled_in_keycloak_cannot_sign_in`
 
 ## TC-49. User switched off in the panel cannot sign in through Keycloak
+
+**Assignment:** #31 Keycloak SSO
 
 **Preconditions:** SSO stack (docker-compose.sso.yml). demo_inactive is enabled in Keycloak and switched off in the app
 
@@ -657,6 +740,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 
 ## TC-50. New Keycloak user gets the "user" role
 
+**Assignment:** #31 Keycloak SSO
+
 **Preconditions:** SSO stack (docker-compose.sso.yml). kc_newcomer exists only in Keycloak
 
 **Steps:**
@@ -670,6 +755,8 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 
 ## TC-51. Role given in the panel survives the next sign-in
 
+**Assignment:** #31 Keycloak SSO
+
 **Preconditions:** SSO stack (docker-compose.sso.yml). kc_promoted has signed in once
 
 **Steps:**
@@ -681,3 +768,144 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 **Expected result:** The home page lists the role "admin". /manage/ opens.
 
 **Automated test:** `tests/test_sso.py::test_51_role_given_in_the_panel_survives_the_next_sign_in`
+
+## TC-52. AD person signs in with the AD password
+
+**Assignment:** #31 Keycloak SSO
+
+**Preconditions:** AD stack (docker-compose.ad.yml). The test adds a person to AD
+
+**Steps:**
+
+1. Add a person to AD
+2. Sign in as them with the AD password
+3. Open /manage/
+
+**Expected result:** The app shows their username and the role "user". /manage/ answers 403.
+
+**Automated test:** `tests/test_ad.py::test_52_ad_person_signs_in_with_the_ad_password`
+
+## TC-53. AD email works as the username
+
+**Assignment:** #31 Keycloak SSO
+
+**Preconditions:** AD stack (docker-compose.ad.yml). The test adds a person to AD
+
+**Steps:**
+
+1. Add a person with an email to AD
+2. On the Keycloak form type the email instead of the username
+
+**Expected result:** The app shows the person's AD username.
+
+**Automated test:** `tests/test_ad.py::test_53_ad_person_signs_in_with_the_email`
+
+## TC-54. Account switched off in AD cannot sign in
+
+**Assignment:** #31 Keycloak SSO
+
+**Preconditions:** AD stack (docker-compose.ad.yml). The test adds a person to AD
+
+**Steps:**
+
+1. Add a person to AD and disable the account there
+2. Sign in as them with the right password
+
+**Expected result:** Keycloak shows an error and the app stays closed.
+
+**Automated test:** `tests/test_ad.py::test_54_account_switched_off_in_ad_cannot_sign_in`
+
+## TC-55. Password set in AD works at once
+
+**Assignment:** #31 Keycloak SSO
+
+**Preconditions:** AD stack (docker-compose.ad.yml). The test adds a person to AD
+
+**Steps:**
+
+1. Add a person to AD
+2. Reset their password in AD
+3. Sign in with the old password
+4. Sign in with the new password
+
+**Expected result:** The old password is refused; the new one lets the person in.
+
+**Automated test:** `tests/test_ad.py::test_55_password_set_in_ad_works_at_once`
+
+## TC-56. User made in the panel is found by the AD email
+
+**Assignment:** #31 Keycloak SSO
+
+**Preconditions:** AD stack (docker-compose.ad.yml). The test adds a person to AD with an email
+
+**Steps:**
+
+1. As admin, create a user in the panel with another username and the same email
+2. Sign in as the AD person
+
+**Expected result:** The panel says the person is in Active Directory. The AD sign-in lands in the user made in the panel.
+
+**Automated test:** `tests/test_ad.py::test_56_user_made_in_the_panel_is_found_by_the_ad_email`
+
+## TC-57. Another user signs in after sign-out
+
+**Assignment:** #31 Keycloak SSO
+
+**Preconditions:** SSO stack (docker-compose.sso.yml)
+
+**Steps:**
+
+1. Sign in through Keycloak as demo_user
+2. Sign out
+3. Sign in through Keycloak as demo_admin
+
+**Expected result:** The app shows demo_admin with the role "admin", not demo_user.
+
+**Automated test:** `tests/test_sso.py::test_57_another_user_signs_in_after_sign_out`
+
+## TC-58. Account unknown to Keycloak cannot sign in
+
+**Assignment:** #31 Keycloak SSO
+
+**Preconditions:** SSO stack (docker-compose.sso.yml)
+
+**Steps:**
+
+1. Open /
+2. In the Keycloak form enter a username Keycloak does not have
+3. As admin, search for that username in the panel
+
+**Expected result:** Keycloak shows "Invalid username or password." and stays on its form. The panel finds nothing.
+
+**Automated test:** `tests/test_sso.py::test_58_account_unknown_to_keycloak_cannot_sign_in`
+
+## TC-59. Cookies of another app on localhost do not break sign-out
+
+**Assignment:** #31 Keycloak SSO
+
+**Preconditions:** SSO stack (docker-compose.sso.yml). The app is opened at localhost:8000; the browser has another app's csrftoken and sessionid for localhost
+
+**Steps:**
+
+1. Sign in through Keycloak as demo_user
+2. The other app writes new csrftoken and sessionid
+3. Press Sign out
+
+**Expected result:** No CSRF 403: the Keycloak form is shown. The other app's cookies keep their values.
+
+**Automated test:** `tests/test_sso.py::test_59_cookies_of_another_app_on_localhost_do_not_break_sign_out`
+
+## TC-60. App sign-in opens the Keycloak account console
+
+**Assignment:** #31 Keycloak SSO
+
+**Preconditions:** SSO stack (docker-compose.sso.yml). Not signed in
+
+**Steps:**
+
+1. Sign in to the app through Keycloak as demo_user
+2. Open the Keycloak account console http://localhost:8080/realms/myapp/account
+
+**Expected result:** The console opens at once with "Personal info", without the sign-in form.
+
+**Automated test:** `tests/test_sso.py::test_60_app_sign_in_opens_the_keycloak_account_console`

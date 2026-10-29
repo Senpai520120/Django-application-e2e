@@ -11,6 +11,10 @@ Safe to re-run: accounts that exist are left alone, and a username Keycloak
 already has is skipped (an ordinary user is linked to it on the first
 sign-in; an admin needs `link_keycloak_user`).
 
+People in Active Directory (Keycloak's User Federation) get no Keycloak
+account of their own: they sign in with the AD password, and the first
+sign-in links them by email or username.
+
     python manage.py push_users_to_keycloak
 """
 
@@ -23,6 +27,7 @@ from accounts.keycloak_admin import (
     KeycloakUnavailable,
     KeycloakUserExists,
     account_exists,
+    in_directory,
     push_user,
 )
 from accounts.models import KeycloakIdentity
@@ -35,7 +40,7 @@ class Command(BaseCommand):
         if not settings.OIDC_ENABLED:
             raise CommandError("OIDC_ENABLED is off: there is no Keycloak to push to")
 
-        created = skipped = 0
+        created = skipped = in_ad = 0
         users = User.objects.select_related("keycloak_identity").order_by("pk")
         try:
             for user in users:
@@ -53,6 +58,12 @@ class Command(BaseCommand):
                     KeycloakIdentity.objects.filter(pk=identity.pk).delete()
                     user.keycloak_identity = None
                     self.stdout.write(f"gone from Keycloak: {user.username}")
+                if in_directory(user):
+                    in_ad += 1
+                    self.stdout.write(
+                        f"in Active Directory, left to it: {user.username}"
+                    )
+                    continue
                 try:
                     push_user(user)
                 except (KeycloakUserExists, KeycloakRefused) as refusal:
@@ -67,5 +78,8 @@ class Command(BaseCommand):
             raise CommandError(f"Keycloak is not available: {error}") from error
 
         self.stdout.write(
-            self.style.SUCCESS(f"Done. Created: {created}, not created: {skipped}.")
+            self.style.SUCCESS(
+                f"Done. Created: {created}, not created: {skipped}, "
+                f"in Active Directory: {in_ad}."
+            )
         )

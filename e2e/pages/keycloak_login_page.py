@@ -24,6 +24,8 @@ class KeycloakLoginPage(BasePage):
         # Keycloak's message for a wrong password or an unknown username.
         self.error_message = page.get_by_text("Invalid username or password.")
         self.account_disabled_message = page.get_by_text("Account is disabled")
+        # The account console has opened for a signed-in user.
+        self.personal_info_heading = page.get_by_role("heading", name="Personal info")
 
     def open_account_console(self):
         """The realm's own account page: signing in here signs in to Keycloak

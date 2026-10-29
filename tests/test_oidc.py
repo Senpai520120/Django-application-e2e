@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from django.contrib.auth.models import Group, User
+from django.contrib.sessions.middleware import SessionMiddleware
 from django.core.exceptions import PermissionDenied
 from django.core.management import CommandError, call_command
 from django.db import IntegrityError
@@ -19,7 +20,7 @@ from django.urls import reverse
 from mozilla_django_oidc.auth import OIDCAuthenticationBackend
 
 from accounts.models import KeycloakIdentity
-from accounts.oidc import KeycloakBackend, keycloak_logout_url
+from accounts.oidc import KeycloakBackend, KeycloakCallbackView, keycloak_logout_url
 from accounts.views import LoginFailedView
 
 OIDC_SETTINGS = {
@@ -246,6 +247,89 @@ def test_two_users_differing_only_in_case_are_not_guessed(backend):
     assert not KeycloakIdentity.objects.exists()
 
 
+# --- one person, one email ---
+
+
+@pytest.mark.django_db
+def test_verified_email_links_a_user_with_another_name(backend, plain_user):
+    """Made here as "ivan", in Active Directory as "i.petrov": the same person."""
+    user = sign_in(
+        backend,
+        claims(
+            preferred_username="i.petrov", email="IVAN@example.com", email_verified=True
+        ),
+    )
+
+    assert user == plain_user
+    assert user.username == "ivan"
+    assert KeycloakIdentity.objects.get(user=plain_user).sub == "sub-ivan"
+
+
+@pytest.mark.django_db
+def test_unverified_email_links_nobody(backend, plain_user):
+    with pytest.raises(PermissionDenied):
+        sign_in(backend, claims(preferred_username="i.petrov", email_verified=False))
+    assert not KeycloakIdentity.objects.exists()
+    assert User.objects.count() == 1
+
+
+@pytest.mark.django_db
+def test_email_wins_over_the_name(backend, plain_user):
+    other = User.objects.create_user("i.petrov", email="petrov@example.com")
+
+    user = sign_in(
+        backend,
+        claims(
+            preferred_username="i.petrov", email="ivan@example.com", email_verified=True
+        ),
+    )
+
+    assert user == plain_user
+    assert not KeycloakIdentity.objects.filter(user=other).exists()
+
+
+@pytest.mark.django_db
+def test_same_name_with_another_email_is_another_person(backend, plain_user):
+    with pytest.raises(PermissionDenied):
+        sign_in(
+            backend,
+            claims(preferred_username="ivan", email="ivan@corp.example.test"),
+        )
+    assert not KeycloakIdentity.objects.exists()
+
+
+@pytest.mark.django_db
+def test_same_name_without_an_email_here_is_still_linked(backend, plain_user):
+    User.objects.filter(pk=plain_user.pk).update(email="")
+
+    user = sign_in(backend, claims(preferred_username="ivan", email_verified=True))
+
+    assert user == plain_user
+
+
+@pytest.mark.django_db
+def test_admin_is_not_linked_by_email(backend, group_admin):
+    with pytest.raises(PermissionDenied):
+        sign_in(
+            backend,
+            claims(
+                preferred_username="b.oss", email=group_admin.email, email_verified=True
+            ),
+        )
+    assert not KeycloakIdentity.objects.exists()
+    assert User.objects.count() == 1
+
+
+@pytest.mark.django_db
+def test_two_users_with_one_email_are_not_guessed(backend):
+    User.objects.create_user("ivan1", email="ivan@example.com")
+    User.objects.create_user("ivan2", email="Ivan@example.com")
+
+    with pytest.raises(PermissionDenied):
+        sign_in(backend, claims(email_verified=True))
+    assert not KeycloakIdentity.objects.exists()
+
+
 # --- refusals that must not turn into errors ---
 
 
@@ -389,6 +473,43 @@ def test_logout_url_uses_the_configured_return_address(rf):
     query = parse_qs(urlsplit(keycloak_logout_url(request)).query)
 
     assert query["post_logout_redirect_uri"] == ["https://app.example/"]
+
+
+# --- the callback after a silent check ---
+
+
+def callback(rf, user, error):
+    """Keycloak answers a silent check (SessionRefresh) of a signed-in user."""
+    request = rf.get("/oidc/callback/", {"error": error, "state": "the-state"})
+    SessionMiddleware(lambda r: None).process_request(request)
+    request.session["oidc_login_next"] = "/files/?path=docs"
+    request.session["oidc_states"] = {"the-state": {"nonce": "n"}}
+    request.user = user
+    return request, KeycloakCallbackView.as_view()(request)
+
+
+@pytest.mark.django_db
+@override_settings(**OIDC_SETTINGS, LOGIN_URL="/oidc/authenticate/")
+@pytest.mark.parametrize("error", ["login_required", "interaction_required"])
+def test_ended_keycloak_session_leads_to_its_form(rf, plain_user, error):
+    request, response = callback(rf, plain_user, error)
+
+    assert response.status_code == 302
+    assert response.url == "/oidc/authenticate/?next=%2Ffiles%2F%3Fpath%3Ddocs"
+    assert not request.user.is_authenticated
+
+
+@pytest.mark.django_db
+@override_settings(
+    **OIDC_SETTINGS,
+    LOGIN_URL="/oidc/authenticate/",
+    LOGIN_REDIRECT_URL_FAILURE="/login/failed/",
+)
+def test_other_keycloak_errors_still_fail(rf, plain_user):
+    request, response = callback(rf, plain_user, "access_denied")
+
+    assert response.url == "/login/failed/"
+    assert not request.user.is_authenticated
 
 
 # --- the sign-in failed page ---
