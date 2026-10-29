@@ -670,5 +670,16 @@
     ],
     "expected": "No CSRF 403: the Keycloak form is shown. The other app's cookies keep their values.",
     "autotest": "tests/test_sso.py::test_59_cookies_of_another_app_on_localhost_do_not_break_sign_out"
+  },
+  {
+    "id": "TC-60",
+    "title": "App sign-in opens the Keycloak account console",
+    "preconditions": "SSO stack (docker-compose.sso.yml). Not signed in",
+    "steps": [
+      "Sign in to the app through Keycloak as demo_user",
+      "Open the Keycloak account console http://localhost:8080/realms/myapp/account"
+    ],
+    "expected": "The console opens at once with \"Personal info\", without the sign-in form.",
+    "autotest": "tests/test_sso.py::test_60_app_sign_in_opens_the_keycloak_account_console"
   }
 ]

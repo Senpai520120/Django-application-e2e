@@ -223,3 +223,12 @@ def test_59_cookies_of_another_app_on_localhost_do_not_break_sign_out(
         if c.get("name") in ("csrftoken", "sessionid")
     }
     assert others == {"csrftoken": "b" * 32, "sessionid": "b" * 32}
+
+
+def test_60_app_sign_in_opens_the_keycloak_account_console(user_page: Page):
+    """TC-60: whoever signed in to the app enters Keycloak's account console
+    without the form (SSO the other way round)."""
+    keycloak = KeycloakLoginPage(user_page).open_account_console()
+
+    expect(keycloak.personal_info_heading).to_be_visible()
+    expect(keycloak.sign_in_button).to_have_count(0)
