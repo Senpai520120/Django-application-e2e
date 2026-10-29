@@ -15,7 +15,10 @@ from django.conf import settings
 from django.contrib.auth.models import Group
 from django.core.exceptions import PermissionDenied
 from django.db import IntegrityError, transaction
+from django.http import HttpResponseRedirect
+from django.shortcuts import resolve_url
 from mozilla_django_oidc.auth import OIDCAuthenticationBackend
+from mozilla_django_oidc.views import OIDCAuthenticationCallbackView
 
 from accounts.models import KeycloakIdentity
 from accounts.permissions import ADMIN_GROUP_NAME, USER_GROUP_NAME
@@ -154,6 +157,29 @@ def fit(value, user, field, cut=True):
     if len(value) <= max_length:
         return value
     return value[:max_length] if cut else ""
+
+
+# Keycloak's answers to a silent check (prompt=none, sent by SessionRefresh)
+# when its own session is gone: it expired, or Keycloak was restarted. This
+# is not a refusal, the user only has to sign in again.
+SIGN_IN_AGAIN_ERRORS = {"login_required", "interaction_required", "consent_required"}
+
+
+class KeycloakCallbackView(OIDCAuthenticationCallbackView):
+    """The stock callback, but an ended Keycloak session leads to the
+    Keycloak form and back to the page asked for, not to "Sign-in failed"."""
+
+    def get(self, request):
+        # The stock view signs the user out, and that empties the session.
+        next_url = request.session.get("oidc_login_next")
+        response = super().get(request)
+        if request.GET.get("error") not in SIGN_IN_AGAIN_ERRORS:
+            return response
+        # Not a silent request this time, so Keycloak shows its form: no loop.
+        url = resolve_url(settings.LOGIN_URL)
+        if next_url:
+            url += "?" + urlencode({"next": next_url})
+        return HttpResponseRedirect(url)
 
 
 def keycloak_logout_url(request):

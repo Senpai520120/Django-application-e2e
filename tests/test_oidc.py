@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from django.contrib.auth.models import Group, User
+from django.contrib.sessions.middleware import SessionMiddleware
 from django.core.exceptions import PermissionDenied
 from django.core.management import CommandError, call_command
 from django.db import IntegrityError
@@ -19,7 +20,7 @@ from django.urls import reverse
 from mozilla_django_oidc.auth import OIDCAuthenticationBackend
 
 from accounts.models import KeycloakIdentity
-from accounts.oidc import KeycloakBackend, keycloak_logout_url
+from accounts.oidc import KeycloakBackend, KeycloakCallbackView, keycloak_logout_url
 from accounts.views import LoginFailedView
 
 OIDC_SETTINGS = {
@@ -472,6 +473,43 @@ def test_logout_url_uses_the_configured_return_address(rf):
     query = parse_qs(urlsplit(keycloak_logout_url(request)).query)
 
     assert query["post_logout_redirect_uri"] == ["https://app.example/"]
+
+
+# --- the callback after a silent check ---
+
+
+def callback(rf, user, error):
+    """Keycloak answers a silent check (SessionRefresh) of a signed-in user."""
+    request = rf.get("/oidc/callback/", {"error": error, "state": "the-state"})
+    SessionMiddleware(lambda r: None).process_request(request)
+    request.session["oidc_login_next"] = "/files/?path=docs"
+    request.session["oidc_states"] = {"the-state": {"nonce": "n"}}
+    request.user = user
+    return request, KeycloakCallbackView.as_view()(request)
+
+
+@pytest.mark.django_db
+@override_settings(**OIDC_SETTINGS, LOGIN_URL="/oidc/authenticate/")
+@pytest.mark.parametrize("error", ["login_required", "interaction_required"])
+def test_ended_keycloak_session_leads_to_its_form(rf, plain_user, error):
+    request, response = callback(rf, plain_user, error)
+
+    assert response.status_code == 302
+    assert response.url == "/oidc/authenticate/?next=%2Ffiles%2F%3Fpath%3Ddocs"
+    assert not request.user.is_authenticated
+
+
+@pytest.mark.django_db
+@override_settings(
+    **OIDC_SETTINGS,
+    LOGIN_URL="/oidc/authenticate/",
+    LOGIN_REDIRECT_URL_FAILURE="/login/failed/",
+)
+def test_other_keycloak_errors_still_fail(rf, plain_user):
+    request, response = callback(rf, plain_user, "access_denied")
+
+    assert response.url == "/login/failed/"
+    assert not request.user.is_authenticated
 
 
 # --- the sign-in failed page ---

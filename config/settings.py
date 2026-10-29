@@ -148,6 +148,8 @@ if OIDC_ENABLED:
     # USE_X_FORWARDED_PROTO to come out as https.
     OIDC_POST_LOGOUT_REDIRECT_URL = env("OIDC_POST_LOGOUT_REDIRECT_URL", default="")
     LOGIN_URL = "oidc_authentication_init"
+    # An ended Keycloak session leads to its form, not to the failed page.
+    OIDC_CALLBACK_CLASS = "accounts.oidc.KeycloakCallbackView"
     # Not "/": that page needs a signed-in user, so a refused user would go
     # to Keycloak, which still remembers them, and back here in a loop.
     # A path, not a URL name: mozilla-django-oidc redirects to it as is.
