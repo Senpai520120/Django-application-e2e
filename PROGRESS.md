@@ -2,15 +2,20 @@
 
 Updated: 2026-10-29.
 
-## Now: PR with the EC2 proof (branch `docs/ec2-deploy-proof`)
+## Now: nothing open; all three assignments are done
+
+## Done: deploy to AWS EC2 (proof for assignment #22, PR #103)
 
 Done 2026-10-29: the stand ran at http://54.167.66.45/ (`t3.micro`, bucket
 `users-and-roles-files-20261029`), proof is in `docs/deploy/` (screenshots,
 `aws s3 ls`, role policy, destroy output) and linked from README. Destroyed;
-AWS CLI shows nothing left. Left for the user: merge the PR ("Create a merge
-commit") and delete the `terraform-deploy` access key in IAM.
+AWS CLI shows nothing left. The IAM user `terraform-deploy` is deleted too, so
+the keys in `~/.aws` no longer work: a new deploy needs a new IAM user.
+Checked against the texts of all three tasks (users & roles, file manager,
+Keycloak SSO): every requirement is covered; CI green in all 4 E2E modes.
 `terraform apply/destroy` are blocked for Claude in auto mode; the user runs
-them. In PowerShell quote `-var` values that contain dots.
+them. In PowerShell quote `-var` values that contain dots. Write commit
+messages with the Write tool: `Set-Content -Encoding utf8` adds a BOM.
 The stand has no Keycloak on purpose (only `db` + `web`, `OIDC_ENABLED` off):
 t3.micro has 1 GB RAM and OIDC needs HTTPS and a stable hostname.
 
