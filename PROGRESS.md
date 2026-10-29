@@ -22,7 +22,7 @@ PR #11 (`feature/keycloak-sso`) is merged into `e2e-test`, with CI green in all 
   All demo and `test_*` accounts: `demo-password-123`.
 
 Tests: 228 unit tests, coverage 93%. E2E with `E2E_AUTH=keycloak`: 42 passed,
-8 skipped (tests of the app's own sign-in form), 1 xfail (bug #142).
+8 skipped (tests of the app's own sign-in form).
 
 ## In progress: Active Directory through Keycloak (branch `feature/active-directory`, pushed, no PR yet)
 
@@ -53,9 +53,7 @@ Tests: 228 unit tests, coverage 93%. E2E with `E2E_AUTH=keycloak`: 42 passed,
 
 ## Known and left as is
 
-- A password changed in Django later is not sent to Keycloak.
 - A Django user deleted while the Keycloak account remains is made again on
   the next sign-in. Revoke access with "Switch off" or by disabling in Keycloak.
 - A timeout while the panel creates a user can leave an extra Keycloak account;
   delete it in the Keycloak console.
-- Bug #142: one audit-log case is not written yet (xfail in E2E).

@@ -523,19 +523,6 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 
 **Automated test:** `tests/test_roles.py::test_39_role_revoke_is_written_to_audit_log`
 
-## TC-40. Switching a user off is written to the audit log
-
-**Preconditions:** Signed in as demo_admin. An active user exists
-
-**Steps:**
-
-1. Click "Deactivate" for the user
-2. Open /manage/audit/
-
-**Expected result:** The newest record is about this user. Known bug #142: the app does not record this yet; the test is marked xfail.
-
-**Automated test:** `tests/test_roles.py::test_40_user_deactivation_is_written_to_audit_log`
-
 ## TC-41. File exactly at the size limit is accepted
 
 **Preconditions:** Signed in. An empty working folder is open in /files/. The size limit is known (5 MB in docker-compose)

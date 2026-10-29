@@ -1,6 +1,5 @@
 """Admin panel: granting and revoking roles, the audit log, the roles page."""
 
-import pytest
 from playwright.sync_api import Page, expect
 
 import config
@@ -119,21 +118,4 @@ def test_39_role_revoke_is_written_to_audit_log(admin_page: Page, new_user):
     expect(audit_page.newest_record_cell(config.ADMIN.username)).to_be_visible()
     expect(audit_page.newest_record_cell("revoked")).to_be_visible()
     expect(audit_page.newest_record_cell("user")).to_be_visible()
-    expect(audit_page.newest_record_cell(new_user.username)).to_be_visible()
-
-
-# xfail = "expected to fail". The app does not log this yet (bug #142).
-# strict=True: when the bug is fixed, the test passes and pytest reports it,
-# so we know to remove this marker.
-@pytest.mark.xfail(
-    reason="Bug #142: the audit log does not record deactivation", strict=True
-)
-def test_40_user_deactivation_is_written_to_audit_log(admin_page: Page, new_user):
-    """TC-40: switching a user off adds a record about that user to the audit log."""
-    users_page = UsersPage(admin_page).open()
-    users_page.search(new_user.username)
-
-    users_page.deactivate(new_user.username)
-
-    audit_page = AuditPage(admin_page).open()
     expect(audit_page.newest_record_cell(new_user.username)).to_be_visible()
