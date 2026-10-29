@@ -658,7 +658,7 @@ file manager on its own.
 | --- | --- |
 | S3 | storage for the file manager: a private bucket with encryption and public access blocked |
 | EC2 (t3.micro, free tier) | an instance with Docker; it pulls the image from GHCR and brings it up together with Postgres |
-| Instance IAM role | access to the bucket limited to `ListBucket`, `GetObject`, `PutObject`, `DeleteObject` — no keys in the code and no `AdministratorAccess` |
+| Instance IAM role | access to the one bucket limited to `ListBucket`, `GetBucketLocation`, `GetObject`, `PutObject`, `DeleteObject` — no keys in the code and no `AdministratorAccess` |
 | Security group | only port 80 is open outward; SSH only if you name your own address |
 
 ```
@@ -668,24 +668,33 @@ browser → EC2 (:80 → gunicorn:8000) ─┬→ Postgres in a container on the
 
 ### The live stand
 
-It was deployed and verified end to end — the application worked and files went
-into S3 — and then torn down, so the address below no longer answers. It is kept
-here as a record of what was checked.
+Deployed on 2026-10-29 and verified end to end: the application worked and
+files went into S3. Then the stand was torn down to stay inside the free tier,
+so the address below no longer answers. The proof is kept in
+[docs/deploy/](docs/deploy/).
 
 | | |
 | --- | --- |
-| Address | http://100.54.108.163/ (decommissioned) |
+| Address | http://54.167.66.45/ (decommissioned) |
 | Account for a look around | `demo_admin` / `demo-password-123` (the stand ran with `seed_demo_users=true`) |
 | Region | `us-east-1` |
-| Bucket | `users-and-roles-files-f92fa1c9` |
-| Image | `ghcr.io/senpai520120/django_application:0.2.0` |
+| Bucket | `users-and-roles-files-20261029` |
+| Image | `ghcr.io/senpai520120/django-application-e2e:sha-75b13e9` |
+
+| Proof | What it shows |
+| --- | --- |
+| [01-sign-in.png](docs/deploy/01-sign-in.png) | the sign-in page on the stand |
+| [02-manage.png](docs/deploy/02-manage.png) | `/manage/` as `demo_admin` |
+| [03-files-s3-upload.png](docs/deploy/03-files-s3-upload.png) | `/files/` with `Storage: S3FileStorage`, a folder made and a file uploaded |
+| [04-s3-and-iam.txt](docs/deploy/04-s3-and-iam.txt) | the same folder and file in the bucket (`aws s3 ls`) and the instance role policy limited to that one bucket |
+| [05-terraform-destroy.txt](docs/deploy/05-terraform-destroy.txt) | the teardown: 10 resources destroyed, nothing left in the account |
 
 ### Steps
 
 ```bash
 cd deploy/aws
 terraform init
-terraform apply   -var region=us-east-1   -var bucket_name=your-globally-unique-bucket   -var key_name=your-key-pair-name   -var ssh_cidr=your.ip.address/32   -var image=ghcr.io/senpai520120/django_application:0.2.0
+terraform apply   -var region=us-east-1   -var bucket_name=your-globally-unique-bucket   -var key_name=your-key-pair-name   -var ssh_cidr=your.ip.address/32   -var image=ghcr.io/senpai520120/django-application-e2e:sha-75b13e9
 ```
 
 The `demo_*` accounts share a password published in this README, so they are
@@ -716,7 +725,7 @@ If you deploy without Terraform, the least-privilege IAM policy is in
 
 ```bash
 cd deploy/aws
-terraform destroy   -var region=us-east-1   -var bucket_name=users-and-roles-files-f92fa1c9   -var key_name=test_django
+terraform destroy   -var region=us-east-1   -var bucket_name=your-globally-unique-bucket   -var key_name=your-key-pair-name   -var image=ghcr.io/senpai520120/django-application-e2e:sha-75b13e9
 ```
 
 One command removes the instance, the bucket together with its files

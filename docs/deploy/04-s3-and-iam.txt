@@ -1,0 +1,31 @@
+﻿# Captured 2026-10-29 from the live stand http://54.167.66.45/ (instance i-05eee7ac1a5335730, us-east-1)
+
+$ aws s3 ls s3://users-and-roles-files-20261029/filemanager/ --recursive
+2026-10-29 17:15:37          0 filemanager/ec2-proof/
+2026-10-29 17:16:01         67 filemanager/ec2-proof/hello-s3.txt
+
+$ aws iam get-role-policy --role-name users-and-roles-app --policy-name users-and-roles-s3 --query PolicyDocument
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Action": [
+                "s3:ListBucket",
+                "s3:GetBucketLocation"
+            ],
+            "Effect": "Allow",
+            "Resource": "arn:aws:s3:::users-and-roles-files-20261029",
+            "Sid": "ListOwnBucket"
+        },
+        {
+            "Action": [
+                "s3:PutObject",
+                "s3:GetObject",
+                "s3:DeleteObject"
+            ],
+            "Effect": "Allow",
+            "Resource": "arn:aws:s3:::users-and-roles-files-20261029/*",
+            "Sid": "ReadWriteObjects"
+        }
+    ]
+}
