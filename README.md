@@ -801,7 +801,8 @@ Outside the scope of the assignment:
 
 * user registration through a public UI — accounts are created by an admin or by
   `createsuperuser`;
-* password recovery, email confirmation, OAuth/SSO;
+* password recovery and email confirmation (SSO was out of scope at first and
+  was added later on request, see "Sign-in through Keycloak (SSO)");
 * a REST API, an SPA, JS frameworks;
 * a separate `Role` model — a role is an `auth.Group`, and duplicating it buys
   nothing (should a role need a description, we would add `Role` with a
