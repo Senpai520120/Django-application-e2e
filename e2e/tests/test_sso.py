@@ -38,9 +38,11 @@ def test_44_anonymous_user_is_sent_to_keycloak_and_back(page: Page):
 
 def test_45_keycloak_session_signs_in_to_the_app(page: Page):
     """TC-45: whoever is signed in to Keycloak enters the app without the form (SSO)."""
-    KeycloakLoginPage(page).open_account_console().sign_in(
-        config.REGULAR_USER.username, config.REGULAR_USER.password
-    )
+    keycloak = KeycloakLoginPage(page).open_account_console()
+    keycloak.sign_in(config.REGULAR_USER.username, config.REGULAR_USER.password)
+    # The console works only with the realm's default roles; accounts from
+    # the realm file get them only when the file names them.
+    expect(keycloak.personal_info_heading).to_be_visible()
 
     page.goto("/")
 

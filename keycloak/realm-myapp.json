@@ -56,6 +56,7 @@
     {
       "id": "00000000-0000-4000-8000-00000000a001",
       "username": "demo_admin",
+      "realmRoles": ["default-roles-myapp"],
       "enabled": true,
       "email": "demo_admin@example.com",
       "emailVerified": true,
@@ -71,6 +72,7 @@
     },
     {
       "username": "demo_user",
+      "realmRoles": ["default-roles-myapp"],
       "enabled": true,
       "email": "demo_user@example.com",
       "emailVerified": true,
@@ -86,6 +88,7 @@
     },
     {
       "username": "demo_inactive",
+      "realmRoles": ["default-roles-myapp"],
       "enabled": true,
       "email": "demo_inactive@example.com",
       "emailVerified": true,
@@ -101,6 +104,7 @@
     },
     {
       "username": "kc_disabled",
+      "realmRoles": ["default-roles-myapp"],
       "enabled": false,
       "email": "kc_disabled@example.com",
       "emailVerified": true,
@@ -116,6 +120,7 @@
     },
     {
       "username": "kc_newcomer",
+      "realmRoles": ["default-roles-myapp"],
       "enabled": true,
       "email": "kc_newcomer@example.com",
       "emailVerified": true,
@@ -131,6 +136,7 @@
     },
     {
       "username": "kc_promoted",
+      "realmRoles": ["default-roles-myapp"],
       "enabled": true,
       "email": "kc_promoted@example.com",
       "emailVerified": true,
