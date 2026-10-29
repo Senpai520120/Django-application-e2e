@@ -1,0 +1,48 @@
+name: Test case
+description: One check of one behaviour of the app
+title: "[TC-XX] "
+labels: ["test-case"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Replace `XX` in the title with the next free number, for example `[TC-35] Admin activates a user`.
+        One issue = one check.
+  - type: dropdown
+    id: assignment
+    attributes:
+      label: Assignment
+      description: Which assignment the checked behaviour comes from.
+      options:
+        - "#14 Users & Roles"
+        - "#22 File manager"
+        - "#31 Keycloak SSO"
+    validations:
+      required: true
+  - type: textarea
+    id: preconditions
+    attributes:
+      label: Preconditions
+      description: What must be true before the first step (who is signed in, what data exists).
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+  - type: input
+    id: autotest
+    attributes:
+      label: Automated test
+      description: file::test, when the case is automated
+      placeholder: tests/test_login.py::test_01_anonymous_user_is_sent_to_sign_in

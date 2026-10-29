@@ -1,0 +1,6 @@
+# The repository rules, with this folder's own top-level modules as first-party
+# (here `config` is e2e/config.py, not the Django project package).
+extend = "../pyproject.toml"
+
+[lint.isort]
+known-first-party = ["config", "helpers", "pages"]

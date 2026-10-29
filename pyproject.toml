@@ -36,5 +36,11 @@ omit = ["*/migrations/*", "config/asgi.py", "config/wsgi.py"]
 
 [tool.coverage.report]
 show_missing = true
+fail_under = 90
 skip_covered = true
 exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError"]
+
+[tool.pyright]
+# e2e/ is a separate import root: there `config` is e2e/config.py (the test
+# settings), not the Django project package, the same as when pytest runs it.
+executionEnvironments = [{ root = "e2e" }, { root = "." }]

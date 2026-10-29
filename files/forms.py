@@ -76,11 +76,28 @@ class RenameForm(forms.Form):
 
 class UploadForm(forms.Form):
     path = PathField()
-    files = MultipleFileField(label=_("Files"))
+    # Not required at field level: a file dropped by SizeLimitUploadHandler
+    # must be reported as too large, not as missing.
+    files = MultipleFileField(label=_("Files"), required=False)
+
+    def __init__(self, *args, oversized=(), **kwargs):
+        super().__init__(*args, **kwargs)
+        self.oversized = list(oversized)
 
     def clean_files(self):
-        uploaded = self.cleaned_data["files"]
+        uploaded = [item for item in self.cleaned_data["files"] if item]
         limit = settings.FILE_MANAGER["MAX_FILE_SIZE"]
+
+        # Already stopped while arriving, so never written to disk.
+        if self.oversized:
+            raise forms.ValidationError(
+                _("File %(name)s is larger than the allowed %(limit)s.")
+                % {"name": self.oversized[0], "limit": filesizeformat(limit)}
+            )
+        if not uploaded:
+            raise forms.ValidationError(
+                self.fields["files"].error_messages["required"], code="required"
+            )
 
         for item in uploaded:
             if item.size > limit:

@@ -1,5 +1,8 @@
 """Views of the /manage/ panel."""
 
+import logging
+
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.models import Group, User
 from django.core.exceptions import PermissionDenied
@@ -15,6 +18,8 @@ from django.views.generic import CreateView, ListView, UpdateView
 from accounts.mixins import AdminRequiredMixin
 from panel.forms import PanelUserCreationForm, UserRolesForm
 from panel.models import RoleChange
+
+logger = logging.getLogger(__name__)
 
 
 def safe_next(request):
@@ -120,6 +125,15 @@ class UserCreateView(AdminRequiredMixin, CreateView):
     @transaction.atomic
     def form_valid(self, form):
         response = super().form_valid(form)
+        notice = None
+        if settings.OIDC_ENABLED:
+            # With SSO the user signs in to Keycloak: no account there, no way in.
+            # If Keycloak refuses, the Django user is not created either.
+            error, notice = create_keycloak_account(self.object)
+            if error:
+                transaction.set_rollback(True)
+                form.add_error(None, error)
+                return self.form_invalid(form)
         RoleChange.log_diff(
             actor=self.request.user,
             target=self.object,
@@ -130,6 +144,8 @@ class UserCreateView(AdminRequiredMixin, CreateView):
             self.request,
             _("User %(username)s created.") % {"username": self.object.username},
         )
+        if notice:
+            messages.info(self.request, notice)
         return response
 
 
@@ -158,3 +174,41 @@ class AuditLogView(AdminRequiredMixin, ListView):
     context_object_name = "changes"
     paginate_by = 20
     queryset = RoleChange.objects.select_related("actor", "target")
+
+
+def create_keycloak_account(user):
+    """Create the user's Keycloak account: (error to show, notice to show).
+
+    Somebody in Active Directory gets no account: the Django user is kept,
+    with the roles given here, and is linked on the first sign-in.
+    """
+    from accounts.keycloak_admin import (
+        KeycloakRefused,
+        KeycloakUnavailable,
+        KeycloakUserExists,
+        in_directory,
+        push_user,
+    )
+
+    try:
+        if in_directory(user):
+            return None, _(
+                "%(username)s is in Active Directory: no Keycloak account was "
+                "made. They sign in with their AD password."
+            ) % {"username": user.username}
+        push_user(user)
+    except KeycloakRefused as refusal:
+        return _("Keycloak refused the account: %(reason)s") % {"reason": refusal}, None
+    except KeycloakUserExists:
+        return (
+            _("Keycloak already has an account named %(username)s.")
+            % {"username": user.username},
+            None,
+        )
+    except KeycloakUnavailable:
+        logger.exception("Keycloak did not create %s", user.username)
+        return (
+            _("Keycloak is not available, the user was not created. Try again."),
+            None,
+        )
+    return None, None

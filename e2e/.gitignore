@@ -1,4 +1,2 @@
-node_modules/
-playwright-report/
+# Playwright: traces, screenshots and videos of failed tests
 test-results/
-blob-report/

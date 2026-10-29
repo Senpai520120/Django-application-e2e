@@ -2,6 +2,7 @@
 
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.files.uploadhandler import TemporaryFileUploadHandler
 from django.urls import reverse
 
 FILE_URLS = [
@@ -15,10 +16,12 @@ FILE_URLS = [
 @pytest.fixture
 def file_root(tmp_path, settings):
     """Each test works in its own folder, so leftovers never travel between tests."""
-    settings.FILE_MANAGER = {
-        **settings.FILE_MANAGER,
-        "BACKEND": "local",
-        "ROOT": str(tmp_path / "storage"),
+    settings.STORAGES = {
+        **settings.STORAGES,
+        "filemanager": {
+            "BACKEND": "files.storage.LocalFileStorage",
+            "OPTIONS": {"location": str(tmp_path / "storage")},
+        },
     }
     return tmp_path / "storage"
 
@@ -156,6 +159,53 @@ def test_upload_over_the_limit_is_refused(user_client, settings):
     assert response.context["entries"] == []
     messages = [str(message) for message in response.context["messages"]]
     assert any("larger than the allowed" in message for message in messages)
+
+
+@pytest.mark.django_db
+def test_oversized_upload_never_reaches_the_disk(user_client, settings, monkeypatch):
+    """The limit stops a file while it arrives, not after it was written."""
+    settings.FILE_MANAGER = {**settings.FILE_MANAGER, "MAX_FILE_SIZE": 10}
+    settings.FILE_UPLOAD_MAX_MEMORY_SIZE = 0  # every upload goes to a temp file
+    written = []
+    original = TemporaryFileUploadHandler.receive_data_chunk
+
+    def counting(self, raw_data, start):
+        written.append(len(raw_data))
+        return original(self, raw_data, start)
+
+    monkeypatch.setattr(TemporaryFileUploadHandler, "receive_data_chunk", counting)
+
+    user_client.post(
+        reverse("files:upload"),
+        {"path": "", "files": SimpleUploadedFile("big.bin", b"x" * 50)},
+    )
+
+    assert written == []
+
+
+@pytest.mark.django_db
+def test_one_oversized_file_refuses_the_whole_batch(user_client, settings):
+    settings.FILE_MANAGER = {**settings.FILE_MANAGER, "MAX_FILE_SIZE": 10}
+    files = [
+        SimpleUploadedFile("small.txt", b"ok"),
+        SimpleUploadedFile("big.bin", b"x" * 50),
+    ]
+
+    response = user_client.post(
+        reverse("files:upload"), {"path": "", "files": files}, follow=True
+    )
+
+    assert response.context["entries"] == []
+    messages = [str(message) for message in response.context["messages"]]
+    assert any("big.bin is larger than the allowed" in m for m in messages)
+
+
+@pytest.mark.django_db
+def test_upload_without_files_asks_for_one(user_client):
+    response = user_client.post(reverse("files:upload"), {"path": ""}, follow=True)
+
+    messages = [str(message) for message in response.context["messages"]]
+    assert any("required" in message for message in messages)
 
 
 @pytest.mark.django_db

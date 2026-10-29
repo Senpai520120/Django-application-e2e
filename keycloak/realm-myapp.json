@@ -1,0 +1,372 @@
+{
+  "realm": "myapp",
+  "enabled": true,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "editUsernameAllowed": false,
+  "clients": [
+    {
+      "clientId": "django-app",
+      "name": "Users & Roles",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "dev-only-secret",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "redirectUris": [
+        "http://localhost:8000/oidc/callback/",
+        "http://127.0.0.1:8000/oidc/callback/"
+      ],
+      "webOrigins": [
+        "+"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:8000/*##http://127.0.0.1:8000/*"
+      },
+      "serviceAccountsEnabled": true
+    },
+    {
+      "clientId": "autoforyou",
+      "name": "AUTOforYOU",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "dev-only-autoforyou-secret",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "redirectUris": [
+        "http://localhost/api/v1/auth/oidc/callback/",
+        "http://localhost:8000/api/v1/auth/oidc/callback/"
+      ],
+      "webOrigins": [
+        "+"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost/*##http://localhost:3000/*"
+      },
+      "serviceAccountsEnabled": false
+    }
+  ],
+  "users": [
+    {
+      "id": "00000000-0000-4000-8000-00000000a001",
+      "username": "demo_admin",
+      "realmRoles": ["default-roles-myapp"],
+      "enabled": true,
+      "email": "demo_admin@example.com",
+      "emailVerified": true,
+      "firstName": "Alice",
+      "lastName": "Adminson",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "demo-password-123",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "demo_user",
+      "realmRoles": ["default-roles-myapp"],
+      "enabled": true,
+      "email": "demo_user@example.com",
+      "emailVerified": true,
+      "firstName": "John",
+      "lastName": "Smith",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "demo-password-123",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "demo_inactive",
+      "realmRoles": ["default-roles-myapp"],
+      "enabled": true,
+      "email": "demo_inactive@example.com",
+      "emailVerified": true,
+      "firstName": "Peter",
+      "lastName": "Inactive",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "demo-password-123",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "kc_disabled",
+      "realmRoles": ["default-roles-myapp"],
+      "enabled": false,
+      "email": "kc_disabled@example.com",
+      "emailVerified": true,
+      "firstName": "Dora",
+      "lastName": "Disabled",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "demo-password-123",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "kc_newcomer",
+      "realmRoles": ["default-roles-myapp"],
+      "enabled": true,
+      "email": "kc_newcomer@example.com",
+      "emailVerified": true,
+      "firstName": "Nina",
+      "lastName": "Newcomer",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "demo-password-123",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "kc_promoted",
+      "realmRoles": ["default-roles-myapp"],
+      "enabled": true,
+      "email": "kc_promoted@example.com",
+      "emailVerified": true,
+      "firstName": "Paul",
+      "lastName": "Promoted",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "demo-password-123",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "service-account-django-app",
+      "enabled": true,
+      "serviceAccountClientId": "django-app",
+      "clientRoles": {
+        "realm-management": [
+          "view-users",
+          "manage-users"
+        ]
+      }
+    }
+  ],
+  "components": {
+    "org.keycloak.userprofile.UserProfileProvider": [
+      {
+        "providerId": "declarative-user-profile",
+        "subComponents": {},
+        "config": {
+          "kc.user.profile.config": [
+            "{\"attributes\":[{\"name\":\"username\",\"displayName\":\"${username}\",\"validations\":{\"length\":{\"min\":3,\"max\":255},\"username-prohibited-characters\":{},\"up-username-not-idn-homograph\":{}},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]},\"multivalued\":false},{\"name\":\"email\",\"displayName\":\"${email}\",\"validations\":{\"email\":{},\"length\":{\"max\":255}},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]},\"multivalued\":false},{\"name\":\"firstName\",\"displayName\":\"${firstName}\",\"validations\":{\"length\":{\"max\":255},\"person-name-prohibited-characters\":{}},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]},\"multivalued\":false},{\"name\":\"lastName\",\"displayName\":\"${lastName}\",\"validations\":{\"length\":{\"max\":255},\"person-name-prohibited-characters\":{}},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]},\"multivalued\":false}],\"groups\":[{\"name\":\"user-metadata\",\"displayHeader\":\"User metadata\",\"displayDescription\":\"Attributes, which refer to user metadata\"}]}"
+          ]
+        }
+      }
+    ],
+    "org.keycloak.storage.UserStorageProvider": [
+      {
+        "name": "active-directory",
+        "providerId": "ldap",
+        "subComponents": {
+          "org.keycloak.storage.ldap.mappers.LDAPStorageMapper": [
+            {
+              "name": "username",
+              "providerId": "user-attribute-ldap-mapper",
+              "subComponents": {},
+              "config": {
+                "ldap.attribute": [
+                  "sAMAccountName"
+                ],
+                "user.model.attribute": [
+                  "username"
+                ],
+                "read.only": [
+                  "true"
+                ],
+                "always.read.value.from.ldap": [
+                  "true"
+                ],
+                "is.mandatory.in.ldap": [
+                  "true"
+                ]
+              }
+            },
+            {
+              "name": "email",
+              "providerId": "user-attribute-ldap-mapper",
+              "subComponents": {},
+              "config": {
+                "ldap.attribute": [
+                  "mail"
+                ],
+                "user.model.attribute": [
+                  "email"
+                ],
+                "read.only": [
+                  "true"
+                ],
+                "always.read.value.from.ldap": [
+                  "true"
+                ],
+                "is.mandatory.in.ldap": [
+                  "false"
+                ]
+              }
+            },
+            {
+              "name": "first name",
+              "providerId": "user-attribute-ldap-mapper",
+              "subComponents": {},
+              "config": {
+                "ldap.attribute": [
+                  "givenName"
+                ],
+                "user.model.attribute": [
+                  "firstName"
+                ],
+                "read.only": [
+                  "true"
+                ],
+                "always.read.value.from.ldap": [
+                  "true"
+                ],
+                "is.mandatory.in.ldap": [
+                  "false"
+                ]
+              }
+            },
+            {
+              "name": "last name",
+              "providerId": "user-attribute-ldap-mapper",
+              "subComponents": {},
+              "config": {
+                "ldap.attribute": [
+                  "sn"
+                ],
+                "user.model.attribute": [
+                  "lastName"
+                ],
+                "read.only": [
+                  "true"
+                ],
+                "always.read.value.from.ldap": [
+                  "true"
+                ],
+                "is.mandatory.in.ldap": [
+                  "false"
+                ]
+              }
+            },
+            {
+              "name": "MSAD account controls",
+              "providerId": "msad-user-account-control-mapper",
+              "subComponents": {},
+              "config": {
+                "ldap.password.policy.hints.enabled": [
+                  "false"
+                ]
+              }
+            }
+          ]
+        },
+        "config": {
+          "enabled": [
+            "${LDAP_ENABLED:false}"
+          ],
+          "vendor": [
+            "ad"
+          ],
+          "connectionUrl": [
+            "ldaps://samba:636"
+          ],
+          "useTruststoreSpi": [
+            "always"
+          ],
+          "connectionTimeout": [
+            "5000"
+          ],
+          "authType": [
+            "simple"
+          ],
+          "bindDn": [
+            "CN=svc-keycloak,CN=Users,DC=corp,DC=example,DC=test"
+          ],
+          "bindCredential": [
+            "${LDAP_BIND_CREDENTIAL:}"
+          ],
+          "usersDn": [
+            "CN=Users,DC=corp,DC=example,DC=test"
+          ],
+          "searchScope": [
+            "1"
+          ],
+          "userObjectClasses": [
+            "person, organizationalPerson, user"
+          ],
+          "customUserSearchFilter": [
+            "(&(!(sAMAccountName=svc-keycloak))(!(sAMAccountName=krbtgt))(!(sAMAccountName=Guest))(!(sAMAccountName=Administrator)))"
+          ],
+          "usernameLDAPAttribute": [
+            "sAMAccountName"
+          ],
+          "rdnLDAPAttribute": [
+            "cn"
+          ],
+          "uuidLDAPAttribute": [
+            "objectGUID"
+          ],
+          "editMode": [
+            "READ_ONLY"
+          ],
+          "importEnabled": [
+            "true"
+          ],
+          "syncRegistrations": [
+            "false"
+          ],
+          "trustEmail": [
+            "true"
+          ],
+          "pagination": [
+            "true"
+          ],
+          "connectionPooling": [
+            "true"
+          ],
+          "fullSyncPeriod": [
+            "-1"
+          ],
+          "changedSyncPeriod": [
+            "-1"
+          ],
+          "cachePolicy": [
+            "DEFAULT"
+          ],
+          "priority": [
+            "0"
+          ],
+          "validatePasswordPolicy": [
+            "false"
+          ],
+          "allowKerberosAuthentication": [
+            "false"
+          ],
+          "useKerberosForPasswordAuthentication": [
+            "false"
+          ]
+        }
+      }
+    ]
+  }
+}

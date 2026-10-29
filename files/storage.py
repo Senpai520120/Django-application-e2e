@@ -3,8 +3,9 @@
 The views talk to this interface only and never learn where the files live.
 The implementations sit on top of the stock `django.core.files.storage`:
 `FileSystemStorage` locally, `S3Boto3Storage` from django-storages in
-production. Adding a third backend means writing one more subclass and
-returning it from `get_storage()`; templates and views stay untouched.
+production. Which one runs is decided by STORAGES["filemanager"] in settings.
+Adding a third backend means writing one more subclass and naming it in
+FILE_STORAGE_BACKEND; this module, the views and the templates stay untouched.
 """
 
 from __future__ import annotations
@@ -18,16 +19,19 @@ from pathlib import Path
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, SuspiciousFileOperation
-from django.core.files.storage import FileSystemStorage
+from django.core.files.storage import FileSystemStorage, storages
 from django.utils import timezone
 
-from files.paths import normalize_path
+from files.paths import clean_name, normalize_path, parent_path
 
 #: An empty folder in S3 is a zero-length object whose key ends with "/".
 S3_DIR_MARKER_SUFFIX = "/"
 
 #: How many keys S3 removes in a single delete_objects request.
 S3_DELETE_BATCH = 1000
+
+#: The STORAGES alias the file manager works with.
+FILE_MANAGER_STORAGE = "filemanager"
 
 
 @dataclass(frozen=True)
@@ -92,6 +96,17 @@ class FileManagerStorage(ABC):
     def total_size(self) -> int:
         """Total size of the storage, used for the overall size limit."""
 
+    def _check_parent(self, path: str) -> None:
+        """New entries go only into a folder that exists.
+
+        The path comes from a hidden form field, so it can be forged:
+        "notes.txt/new" would make the local disk fail with an OSError and S3
+        quietly invent a folder next to the file. Both refuse it here instead.
+        """
+        parent = parent_path(normalize_path(path))
+        if parent and not self.is_dir(parent):
+            raise StorageError("The parent folder does not exist.")
+
 
 class LocalFileStorage(FileManagerStorage):
     """Files physically live on the server disk."""
@@ -147,12 +162,14 @@ class LocalFileStorage(FileManagerStorage):
         target = self._absolute(path)
         if target.exists():
             raise StorageError("A folder or file with this name already exists.")
-        target.mkdir(parents=True)
+        self._check_parent(path)
+        target.mkdir()
 
     def save(self, path: str, file) -> str:
         relative = normalize_path(path)
         if self.exists(relative):
             raise StorageError("A file with this name already exists.")
+        self._check_parent(relative)
         return self._storage.save(relative, file)
 
     def open(self, path: str):
@@ -176,8 +193,6 @@ class LocalFileStorage(FileManagerStorage):
             target.unlink()
 
     def rename(self, path: str, new_name: str) -> str:
-        from files.paths import clean_name, parent_path
-
         relative = normalize_path(path)
         if not relative:
             raise StorageError("The root folder cannot be renamed.")
@@ -293,6 +308,7 @@ class S3FileStorage(FileManagerStorage):
             raise StorageError("Empty folder name.")
         if self.exists(relative):
             raise StorageError("A folder or file with this name already exists.")
+        self._check_parent(relative)
         self._client.put_object(
             Bucket=self._bucket, Key=self._dir_prefix(relative), Body=b""
         )
@@ -301,6 +317,7 @@ class S3FileStorage(FileManagerStorage):
         relative = normalize_path(path)
         if self.exists(relative):
             raise StorageError("A file with this name already exists.")
+        self._check_parent(relative)
         return self._storage.save(relative, file)
 
     def open(self, path: str):
@@ -336,8 +353,6 @@ class S3FileStorage(FileManagerStorage):
             self._client.delete_objects(Bucket=self._bucket, Delete={"Objects": batch})
 
     def rename(self, path: str, new_name: str) -> str:
-        from files.paths import clean_name, parent_path
-
         relative = normalize_path(path)
         if not relative:
             raise StorageError("The root folder cannot be renamed.")
@@ -403,15 +418,15 @@ class S3FileStorage(FileManagerStorage):
 
 
 def get_storage() -> FileManagerStorage:
-    """The storage chosen by settings. The only place a backend is picked."""
-    backend = settings.FILE_MANAGER["BACKEND"]
+    """The storage configured in STORAGES["filemanager"].
 
-    if backend == "local":
-        return LocalFileStorage(settings.FILE_MANAGER["ROOT"])
-    if backend == "s3":
-        return S3FileStorage(location=settings.FILE_MANAGER["S3_LOCATION"])
-
-    raise ImproperlyConfigured(
-        f"Unknown file manager backend: {backend!r}. "
-        "Allowed values of FILE_STORAGE_BACKEND: local, s3."
-    )
+    Django's own storage registry builds it from BACKEND and OPTIONS, the same
+    way it builds STORAGES["default"], so no backend is named in code here.
+    """
+    storage = storages[FILE_MANAGER_STORAGE]
+    if not isinstance(storage, FileManagerStorage):
+        raise ImproperlyConfigured(
+            f'STORAGES["{FILE_MANAGER_STORAGE}"] must be a FileManagerStorage, '
+            f"got {type(storage).__name__}."
+        )
+    return storage

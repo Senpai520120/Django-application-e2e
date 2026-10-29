@@ -22,7 +22,7 @@ What is written by hand: the panel, the access control and the templates.
 | Configuration | `django-environ`, everything from the environment |
 | Tests | pytest + pytest-django, 157 tests, 95% coverage |
 | Lint | ruff + black, run by hand and in CI |
-| E2E | Playwright (chromium), panel and file manager scenarios |
+| E2E | pytest + Playwright (chromium), sign-in, panel and file manager scenarios |
 | CI/CD | GitHub Actions: linters → Django checks → tests → docker compose smoke → image published to GHCR |
 
 ## Quick start
@@ -191,7 +191,7 @@ Written by hand:
 | `files/storage.py` | the storage contract and two implementations: disk and S3 |
 | `files/access.py` | the access rule for the files section |
 | `files/views.py` | listing, upload, rename, delete, download |
-| `e2e/` | Playwright: panel and file manager scenarios in a browser |
+| `e2e/` | pytest + Playwright: sign-in, panel and file manager scenarios in a browser |
 | `deploy/aws/` | Terraform: bucket, IAM role, instance |
 | `templates/` | every template, including `registration/login.html` and 403/404/500 |
 | `config/settings.py` | settings on top of `django-environ` |
@@ -242,10 +242,13 @@ files/storage.py
 └── S3FileStorage        on top of S3Storage from django-storages
 ```
 
-The backend is chosen by `get_storage()` from `FILE_STORAGE_BACKEND`, which also
-sets `STORAGES["default"]` in the settings — the same way `DATABASE_URL` picks a
-database. A third backend is added as a new subclass: views and templates stay
-as they are.
+The backend lives in `STORAGES["filemanager"]` in the settings, next to
+`STORAGES["default"]`, and Django's own storage registry builds it;
+`get_storage()` only fetches it. `FILE_STORAGE_BACKEND` fills it in the same
+way `DATABASE_URL` picks a database: `local`, `s3`, or the dotted path of any
+other `FileManagerStorage` subclass. A third backend is therefore one new
+class plus `FILE_STORAGE_BACKEND=yourapp.storage.YourStorage`: `files/storage.py`,
+the views and the templates stay as they are.
 
 Folders in S3 are virtual: an empty folder is a zero-length object whose key
 ends with `/`. Deleting a folder removes every key under its prefix; renaming
@@ -276,9 +279,10 @@ docker compose --profile s3 up --build
 | Path traversal | `files/paths.py`: `..`, absolute paths, drive letters and null bytes are rejected before the storage is touched, and the answer is 400 |
 | Symlink leading out | the local storage additionally compares the already resolved path with the root |
 | File names | separators, control characters and names reserved by Windows are forbidden, and length is capped at 120 characters |
-| Size | a per-file limit and a total-storage limit, both from the environment |
+| Size | a per-file limit enforced while the file arrives: `files/uploads.py` stops reading a file once it passes the limit, so an oversized upload never reaches the disk. A total-storage limit is checked before saving; it is a soft limit (no lock), so uploads at the very same moment can overshoot it by one batch each. Both come from the environment |
 | Dangerous extensions | a download always carries `Content-Disposition: attachment` plus `X-Content-Type-Options: nosniff`, so the browser never executes an `.html` or an `.svg` |
 | Overwriting | a file with an existing name is not silently overwritten but answered with an error |
+| Forged parent | a new file or folder goes only into an existing folder; `notes.txt/new` is refused the same way by both backends |
 | Secrets | AWS keys live only in `.env` and in the IAM role; the repository holds none |
 
 Every line above is covered by tests: `tests/test_files_paths.py`,
@@ -287,7 +291,7 @@ Every line above is covered by tests: `tests/test_files_paths.py`,
 ## Tests
 
 ```bash
-pytest                                  # 157 tests
+pytest                                  # 167 tests
 pytest -v
 pytest --cov --cov-report=term-missing  # coverage (95% right now)
 ```
@@ -325,61 +329,210 @@ What is covered:
 The test environment lives in `config/settings_test.py`; the user fixtures are in
 `tests/conftest.py`.
 
+## Sign-in through Keycloak (SSO)
+
+Off by default. `docker-compose.sso.yml` adds Keycloak with the realm from
+`keycloak/realm-myapp.json` and turns `OIDC_ENABLED` on:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.sso.yml up -d --build --wait
+```
+
+Then `/login/` leads to the Keycloak form at `localhost:8080`, and signing in
+there signs in to every app of the realm (the account page
+`http://localhost:8080/realms/myapp/account` opens without a second form).
+"Sign out" ends the Keycloak session too. Keycloak admin console:
+`http://localhost:8080/admin`, `admin` / `admin`.
+
+**Who decides what.** Keycloak answers "who you are": password, disabled
+accounts, the shared session. The app keeps "what you may do": roles are still
+given in `/manage/` and written to the audit log, and a user switched off in
+the panel stays out even with a valid Keycloak password (they land on
+`/login/failed/`). A user who exists only in Keycloak gets the `user` role on
+the first sign-in.
+
+**How a Keycloak account finds its Django user.** By Keycloak's permanent id
+(`sub`), kept in `accounts.KeycloakIdentity`, so renaming an account in
+Keycloak changes nothing in the app. On the very first sign-in an existing
+Django user is linked: first by email, when Keycloak vouches for it
+(`email_verified`, as for everyone from Active Directory), then by the same
+username (case aside), which is how the `demo_*` accounts become the same
+people on both sides. The same name with another email is another person and
+is refused. Never linked by name or email:
+a user already linked to another Keycloak account, and anybody with admin
+rights (the `admin` role, staff, superusers), since whoever first signed in
+under that name would get those rights. Admins are linked by hand with the
+Keycloak account id (the "ID" on the user's page in the Keycloak console):
+
+```bash
+python manage.py link_keycloak_user olga=2b0f5c1e-...           # several pairs allowed
+python manage.py link_keycloak_user --replace olga=<new id>     # account recreated in Keycloak
+```
+
+In docker the same runs on start from `KEYCLOAK_LINKS`; that is how
+`demo_admin` (its id is fixed in the realm file) is linked.
+
+**Users made in the app get Keycloak accounts.** With SSO on, "New user" in
+`/manage/` creates the Keycloak account too, with the same password; if
+Keycloak is down or already has that username, nobody is created and the form
+says why. Users made while SSO was off get their accounts on the next start
+in SSO mode (`manage.py push_users_to_keycloak`, run by the entrypoint), and
+sign in with their old password. This works because Keycloak accepts Django's
+`pbkdf2_sha256` password hashes as they are: the app never sees or sends a
+plain password. The app calls Keycloak's Admin API as the service account of
+its `django-app` client, which may only view and manage users. Email and name
+are optional in the realm, as in the panel.
+
+**A password changed in Django goes to Keycloak too**, the same way, as a
+hash: whatever changed it (`/admin/`, `manage.py changepassword`, a shell),
+saving the user sends the new hash once the change is committed
+(`accounts/signals.py`). If Keycloak is down then, the change in Django stays
+and the error is logged; Keycloak keeps the old password until the next
+change. People from Active Directory change their password in AD.
+
+Not synced: switching a user off (the app refuses them anyway), and names
+and emails changed later.
+
+**When Keycloak loses accounts.** This development Keycloak keeps its data
+inside its container, so after `docker compose down` it has only the realm
+file again. With `KEYCLOAK_REMAKE_LOST_ACCOUNTS=True` (set in
+`docker-compose.sso.yml`) the app makes the lost accounts again on start, with
+the users' current passwords. Leave it off in production: there an account
+missing in Keycloak was deleted on purpose, and the app only reports it.
+
+**Disabled in Keycloak while signed in.** Every 15 minutes
+(`OIDC_RENEW_ID_TOKEN_EXPIRY_SECONDS`) the app silently asks Keycloak again
+about a signed-in user; someone disabled or deleted there is signed out then.
+Switching a user off in the panel works at once. With SSO on there
+are no local passwords at all, the `/admin/` form included: Keycloak is the
+only way in, and a user switched off in the panel loses their session at once.
+
+Accounts in the realm, all with the password `demo-password-123`:
+
+| Username | In Keycloak | In the app |
+| --- | --- | --- |
+| `demo_admin`, `demo_user` | enabled | as in [Demo users](#demo-users) |
+| `demo_inactive` | enabled | switched off: Keycloak lets in, the app does not |
+| `kc_disabled` | disabled | — |
+| `kc_newcomer`, `kc_promoted` | enabled | appear on the first sign-in |
+
+The secret `dev-only-secret` is for local runs only. The app talks to Keycloak
+at two addresses (`OIDC_BROWSER_URL` for the browser, `OIDC_BACKEND_URL` from
+inside docker); outside docker both are the same and only the first is needed.
+
+E2E in this mode: `E2E_AUTH=keycloak pytest e2e`. The fixtures sign in through
+the Keycloak form, tests of the app's own form are skipped, and
+`e2e/tests/test_sso.py` runs (TC-44…51).
+
+**One person, one email.** The realm lets no two accounts share an email
+(`duplicateEmailsAllowed: false`), and the email works as the username on the
+form. Other apps of the realm can rely on it to find their own users: the
+realm also has the `autoforyou` client, and its containers reach Keycloak at
+`http://keycloak:8080` through the shared docker network `sso-shared`.
+
+## Active Directory through Keycloak
+
+`docker-compose.ad.yml`, laid over SSO, adds a test domain controller (Samba,
+domain `CORP.EXAMPLE.TEST`) and switches on the `active-directory` provider of
+the realm (Keycloak's User Federation over LDAPS, read only):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.sso.yml   -f docker-compose.ad.yml up -d --build --wait
+```
+
+The first start makes the domain and takes about a minute.
+
+- **AD decides who you are.** Keycloak checks the password against AD on every
+  sign-in: a password reset or an account disabled in AD counts at once. People
+  and passwords are managed in AD only; Keycloak and the app do not write there.
+- **The app decides what you may do**, as with plain SSO: roles in `/manage/`.
+  Someone from AD gets the `user` role on the first sign-in.
+- **No second account for people in AD.** `push_users_to_keycloak` and "New
+  user" in the panel ask Keycloak first: a username or email it finds in AD
+  gets no Keycloak account of its own. The panel still makes the Django user
+  (give them roles ahead) and says they are in Active Directory; their first
+  AD sign-in lands in that user, found by email, or by the username.
+- **TLS.** Samba makes a certificate for the name `samba` on its first start
+  and keeps it in the `samba-tls` volume; Keycloak trusts exactly that one
+  (`KC_TRUSTSTORE_PATHS`). In production give Keycloak the CA of the real
+  domain controllers instead.
+
+Test accounts (password `demo-password-123`): `ad_alice`, `ad_bob`, and
+`ad_disabled`, which is disabled in AD. Domain administrator:
+`Administrator` / `Samba-admin-123`; Keycloak reads AD as `svc-keycloak`.
+All of them are for this test domain only. LDAPS is published on
+`127.0.0.1:6636` for the tests.
+
+Two things that differ from a real domain on purpose: the domain lives in the
+container and is made again after `down` (people get new ids then, and with
+`KEYCLOAK_REMAKE_LOST_ACCOUNTS` the app drops the old links so the next
+sign-in links them again), and the old password stops working at once after
+a change (AD normally allows it for another hour: `old password allowed
+period`).
+
+E2E in this mode: `E2E_AUTH=ad pytest e2e`: everything of the SSO mode plus
+`e2e/tests/test_ad.py` (TC-52…56), which adds people to AD over LDAPS as the
+domain administrator would (`e2e/directory.py`).
+
 ## E2E tests (Playwright)
 
 Pytest checks the backend and the views; Playwright checks that the scenario
 works in a real browser. Neither replaces the other.
 
+The browser tests are written in Python with pytest and
+[pytest-playwright](https://playwright.dev/python/). They have their own
+requirements and their own `e2e/pytest.ini`, so a plain `pytest` still runs
+only the unit tests, and the two never mix.
+
 ```bash
-cd e2e
-npm ci
-npx playwright install chromium
-BASE_URL=http://127.0.0.1:8000 npx playwright test      # against a running stack
-npx playwright show-report                              # the report afterwards
+pip install -r e2e/requirements.txt
+python -m playwright install chromium
+pytest e2e                                  # against a running stack on :8000
+pytest e2e --base-url http://host:port      # against another copy of the app
+pytest e2e --browser firefox --browser webkit
+pytest e2e --headed --slowmo 500            # watch it in a real window
 ```
 
-The app under test is started by the same `docker compose` as usual. The account
-comes from `seed_demo_users` — `demo_admin` with the password above, overridable
-through `E2E_USERNAME` / `E2E_PASSWORD`.
+The app under test is started by the same `docker compose` as usual. The tests
+sign in as the `seed_demo_users` accounts (`demo_admin`, `demo_user`,
+`demo_inactive`) with the password above, overridable through `E2E_PASSWORD`.
+`E2E_MAX_FILE_SIZE` must match the app's `FILE_MANAGER_MAX_FILE_SIZE`
+(5 MB in docker-compose).
 
-Run Playwright **from the `e2e/` directory**. There is no config in the
-repository root, so from there the runner and the specs end up with two
-different instances of `@playwright/test` and every file fails with "did not
-expect test.describe() to be called here". Use `--config e2e/playwright.config.ts`
-if you have to launch it from elsewhere.
+Without Docker, a dev server works too:
+
+```bash
+export DATABASE_URL=sqlite:///e2e.sqlite3 FILE_MANAGER_MAX_FILE_SIZE=5242880 DEBUG=True
+python manage.py migrate && python manage.py seed_groups && python manage.py seed_demo_users --force
+python manage.py runserver 127.0.0.1:8000
+```
 
 ```
 e2e/
-├── playwright.config.ts   baseURL from the environment, retries in CI only,
-│                          trace on-first-retry, video and screenshot on failure
-├── support/
-│   ├── fixtures.ts        login, unique names, the panel and workspace fixtures
-│   ├── panel.page.ts      Page Object of the admin panel
-│   └── file-manager.page.ts   Page Object of the files section
-├── auth.spec.ts           anonymous access, sign-in, moving into the section,
-│                          the identical answer to a wrong password and an
-│                          unknown login
-├── panel.spec.ts          granting and revoking a role, cancelling the form,
-│                          the ban on stripping admin from yourself,
-│                          deactivation, the audit record, the counter on the
-│                          Roles page, creating a user, a weak password
-├── folders.spec.ts        creation, nesting, breadcrumbs, duplicates, deletion
-└── files.spec.ts          upload (one and several), rename, download, delete,
-                           a file over the limit
+├── pytest.ini         base URL, trace/screenshot/video kept for failed tests
+├── requirements.txt   pytest + pytest-playwright
+├── config.py          base URL, demo accounts, size limit (all from env)
+├── conftest.py        signed-in tabs, a fresh user per test, a workspace
+│                      folder per file test, cleanup after each test
+├── helpers.py         unique names, sign-in, sending a form straight to the server
+├── pages/             Page Objects: login, home, users, roles, audit, files
+├── docs/test-cases.md TC-01 … TC-43, the description of every scenario
+├── tools/             test_cases.json (the source of the cases) and a script that
+│                      writes docs/test-cases.md or opens "Test case" issues:
+│                      cd e2e && python tools/create_test_case_issues.py --markdown
+└── tests/
+    ├── test_login.py     sign-in, wrong password, unknown and inactive user, sign-out
+    ├── test_access.py    who reaches /manage/ and /files/, forms sent directly
+    ├── test_users.py     search, create, weak password, switching a user off
+    ├── test_roles.py     grant and revoke a role, self-lockout ban, audit log
+    ├── test_folders.py   create, nest, breadcrumbs, duplicates, delete
+    └── test_files.py     upload, rename, download, delete, the size limit
 ```
 
-Every file test works in a folder of its own with a unique name and cleans it up
-afterwards; the panel tests return the demo user to the original set of roles in
-`afterEach` and create new users under unique names. Runs depend neither on each
-other nor on order. There are no timer-based waits: only web-first assertions,
-which wait for the state they need on their own.
-
-**About codegen.** Scenario drafts were recorded with `npx playwright codegen`
-and then put in order by hand: locators were replaced with `getByRole`,
-`getByLabel` and `getByTestId`, repeated steps were moved into Page Objects and
-fixtures, and the steps were labelled with `test.step()`. For stable locators a
-few `aria-label`, `role="status"` and `data-testid` attributes were added to the
-templates on purpose — that is more honest than clinging to markup classes.
+Every file test works in a folder of its own with a unique name and deletes it
+afterwards; role and deactivation tests work on a brand-new user per test.
+Runs depend neither on each other nor on order. Failed tests leave a trace,
+a screenshot and a video in `test-results/` (`playwright show-trace <zip>`).
 
 The whole project speaks English: interface, comments, test names and docs.
 `LANGUAGE_CODE` is `en-us`, so Django's own messages — login errors, password
@@ -418,12 +571,12 @@ and from the button (`workflow_dispatch`). Six jobs:
 | **Django checks** | `manage.py check`, `makemigrations --check` (forgotten migrations), `check --deploy --fail-level WARNING` with the HTTPS flags on |
 | **Tests** | a matrix of Python 3.12 and 3.13, a real PostgreSQL 16 service container, `pytest --cov --cov-fail-under=90`, coverage report in the artifacts |
 | **docker compose up** | starts the stack the way production does and checks the 302 for anonymous visitors on `/manage/` and `/files/`, an admin sign-in, and that the roles are seeded |
-| **E2E (Playwright)** | starts the same stack, installs chromium, runs the panel and file manager scenarios, and on failure keeps the Playwright report as an artifact |
+| **E2E (Playwright)** | starts the same stack, installs chromium, runs `pytest e2e` against local storage and S3, and on failure keeps traces, screenshots and videos as an artifact |
 | **Publish to GHCR** | waits for a green smoke and E2E; for `main` and `v*` tags only: builds the image and pushes it to `ghcr.io/<owner>/<repo>` with the `latest`, `sha-…` and semver tags. Uses the built-in `GITHUB_TOKEN`, so no secrets to configure |
 
 CD goes as far as publishing the image: after that, `docker compose pull &&
 docker compose up -d` with that image is enough on your own server. Dependency
-updates come from `.github/dependabot.yml` (pip, npm, GitHub Actions, Docker and
+updates come from `.github/dependabot.yml` (pip for the app and for e2e, GitHub Actions, Docker and
 docker-compose, weekly).
 
 ## PostgreSQL instead of SQLite
@@ -522,7 +675,7 @@ here as a record of what was checked.
 | | |
 | --- | --- |
 | Address | http://100.54.108.163/ (decommissioned) |
-| Account for a look around | `demo_admin` / `demo-password-123` |
+| Account for a look around | `demo_admin` / `demo-password-123` (the stand ran with `seed_demo_users=true`) |
 | Region | `us-east-1` |
 | Bucket | `users-and-roles-files-f92fa1c9` |
 | Image | `ghcr.io/senpai520120/django_application:0.2.0` |
@@ -534,6 +687,13 @@ cd deploy/aws
 terraform init
 terraform apply   -var region=us-east-1   -var bucket_name=your-globally-unique-bucket   -var key_name=your-key-pair-name   -var ssh_cidr=your.ip.address/32   -var image=ghcr.io/senpai520120/django_application:0.2.0
 ```
+
+The `demo_*` accounts share a password published in this README, so they are
+**not** created by default: the stand is reachable from the internet over plain
+HTTP. Sign in with your own administrator instead
+(`docker compose exec web python manage.py createsuperuser` over SSH), or add
+`-var seed_demo_users=true` for a short-lived demo and destroy the stand
+afterwards.
 
 A key pair belongs to a region, so deploy into the same region where it was
 created. The `terraform.tfstate` file holds the generated `SECRET_KEY` and the
@@ -603,7 +763,7 @@ files/            the file manager at /files/
   storage.py        the storage contract plus local and s3
   access.py         who gets into the section
   views.py          listing, upload, rename, delete, download
-e2e/              Playwright: scenarios in a browser
+e2e/              pytest + Playwright: scenarios in a browser
 deploy/aws/       Terraform: S3, IAM role, EC2
 templates/        base.html, registration/login.html, the panel, 403/404/500
 static/css/       the single css file
