@@ -1,4 +1,4 @@
 pytest>=9.1.1
-pytest-playwright>=0.7
+pytest-playwright>=0.10.0
 # Adds and changes people in the test Active Directory (tests/test_ad.py).
-ldap3>=2.9
+ldap3>=2.9.1
