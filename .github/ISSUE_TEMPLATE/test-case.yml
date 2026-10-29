@@ -8,6 +8,17 @@ body:
       value: |
         Replace `XX` in the title with the next free number, for example `[TC-35] Admin activates a user`.
         One issue = one check.
+  - type: dropdown
+    id: assignment
+    attributes:
+      label: Assignment
+      description: Which assignment the checked behaviour comes from.
+      options:
+        - "#14 Users & Roles"
+        - "#22 File manager"
+        - "#31 Keycloak SSO"
+    validations:
+      required: true
   - type: textarea
     id: preconditions
     attributes:

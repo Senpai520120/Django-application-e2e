@@ -34,6 +34,15 @@ def numbered(steps: list[str]) -> str:
     return "\n".join(f"{number}. {step}" for number, step in enumerate(steps, 1))
 
 
+# Issues of the assignments the cases come from; the same options as in
+# the "Assignment" dropdown of the issue form.
+ASSIGNMENTS = {14: "Users & Roles", 22: "File manager", 31: "Keycloak SSO"}
+
+
+def assignment(case: dict) -> str:
+    return f"#{case['assignment']} {ASSIGNMENTS[case['assignment']]}"
+
+
 def issue_title(case: dict) -> str:
     return f"[{case['id']}] {case['title']}"
 
@@ -41,6 +50,7 @@ def issue_title(case: dict) -> str:
 def issue_body(case: dict) -> str:
     """The same markdown GitHub makes when the issue form is submitted."""
     return (
+        f"### Assignment\n\n{assignment(case)}\n\n"
         f"### Preconditions\n\n{case['preconditions']}\n\n"
         f"### Steps\n\n{numbered(case['steps'])}\n\n"
         f"### Expected result\n\n{case['expected']}\n\n"
@@ -107,6 +117,8 @@ def write_markdown(cases: list[dict]) -> None:
     for case in cases:
         lines += [
             f"## {case['id']}. {case['title']}",
+            "",
+            f"**Assignment:** {assignment(case)}",
             "",
             f"**Preconditions:** {case['preconditions']}",
             "",
