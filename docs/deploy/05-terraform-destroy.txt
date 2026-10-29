@@ -1,0 +1,39 @@
+### terraform destroy (2026-10-29), run right after the screenshots
+
+Plan: 0 to add, 0 to change, 10 to destroy.
+
+Changes to Outputs:
+  - app_url     = "http://54.167.66.45/" -> null
+  - bucket      = "users-and-roles-files-20261029" -> null
+  - instance_id = "i-05eee7ac1a5335730" -> null
+
+aws_s3_bucket_public_access_block.files: Destroying... [id=users-and-roles-files-20261029]
+aws_iam_role_policy.app_s3: Destroying... [id=users-and-roles-app:users-and-roles-s3]
+aws_s3_bucket_server_side_encryption_configuration.files: Destroying... [id=users-and-roles-files-20261029]
+aws_instance.app: Destroying... [id=i-05eee7ac1a5335730]
+aws_s3_bucket_public_access_block.files: Destruction complete after 0s
+aws_s3_bucket_server_side_encryption_configuration.files: Destruction complete after 0s
+aws_iam_role_policy.app_s3: Destruction complete after 1s
+aws_instance.app: Destruction complete after 32s
+aws_iam_instance_profile.app: Destroying... [id=users-and-roles-app]
+aws_security_group.app: Destroying... [id=sg-066ed05126734d3c9]
+random_password.secret_key: Destroying... [id=none]
+random_password.db_password: Destroying... [id=none]
+aws_s3_bucket.files: Destroying... [id=users-and-roles-files-20261029]
+random_password.secret_key: Destruction complete after 0s
+random_password.db_password: Destruction complete after 0s
+aws_security_group.app: Destruction complete after 1s
+aws_iam_instance_profile.app: Destruction complete after 2s
+aws_iam_role.app: Destroying... [id=users-and-roles-app]
+aws_iam_role.app: Destruction complete after 0s
+aws_s3_bucket.files: Destruction complete after 3s
+
+Destroy complete! Resources: 10 destroyed.
+
+### Checked afterwards with the AWS CLI
+- instance i-05eee7ac1a5335730: terminated
+- aws s3 ls: no users-and-roles-* bucket
+- IAM roles: no users-and-roles-app
+- security groups named users-and-roles-app: none
+- Elastic IPs: none
+- terraform state list: empty
