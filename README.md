@@ -383,8 +383,15 @@ plain password. The app calls Keycloak's Admin API as the service account of
 its `django-app` client, which may only view and manage users. Email and name
 are optional in the realm, as in the panel.
 
-Not synced: a password changed in Django later, and switching a user off
-(the app refuses them anyway). Keycloak keeps its own copy from then on.
+**A password changed in Django goes to Keycloak too**, the same way, as a
+hash: whatever changed it (`/admin/`, `manage.py changepassword`, a shell),
+saving the user sends the new hash once the change is committed
+(`accounts/signals.py`). If Keycloak is down then, the change in Django stays
+and the error is logged; Keycloak keeps the old password until the next
+change. People from Active Directory change their password in AD.
+
+Not synced: switching a user off (the app refuses them anyway), and names
+and emails changed later.
 
 **When Keycloak loses accounts.** This development Keycloak keeps its data
 inside its container, so after `docker compose down` it has only the realm
@@ -526,10 +533,6 @@ Every file test works in a folder of its own with a unique name and deletes it
 afterwards; role and deactivation tests work on a brand-new user per test.
 Runs depend neither on each other nor on order. Failed tests leave a trace,
 a screenshot and a video in `test-results/` (`playwright show-trace <zip>`).
-
-TC-40 is marked `xfail`: switching a user off is not written to the audit log
-yet. When that is fixed, pytest reports it as unexpectedly passing and the
-marker must be removed.
 
 The whole project speaks English: interface, comments, test names and docs.
 `LANGUAGE_CODE` is `en-us`, so Django's own messages — login errors, password

@@ -20,6 +20,7 @@ from accounts.keycloak_admin import (
     KeycloakUnavailable,
     KeycloakUserExists,
     credential_from_hash,
+    push_password,
     push_user,
 )
 from accounts.models import KeycloakIdentity
@@ -76,10 +77,15 @@ class FakeKeycloak:
         users_url = "http://kc/admin/realms/myapp/users"
         if method == "get" and url == users_url:
             return FakeResponse(200, self.search(**params))
-        if method == "get":
+        if method in ("get", "put"):
             sub = url.removeprefix(users_url + "/")
-            ids = {account["id"] for account in self.accounts.values()}
-            return FakeResponse(200 if sub in ids else 404)
+            by_id = {account["id"]: account for account in self.accounts.values()}
+            if sub not in by_id:
+                return FakeResponse(404)
+            if method == "get":
+                return FakeResponse(200)
+            by_id[sub]["credentials"] = json["credentials"]
+            return FakeResponse(204)
         assert (method, url) == ("post", users_url)
         names = {*self.accounts, *self.directory}
         if json["username"] in names:
@@ -391,6 +397,87 @@ def test_command_stops_when_keycloak_is_down(keycloak, plain_user):
 def test_command_refuses_without_sso():
     with pytest.raises(CommandError, match="OIDC_ENABLED is off"):
         push_all()
+
+
+# --- a password changed in Django goes to Keycloak too ---
+
+
+@pytest.fixture
+def account(keycloak, plain_user, password, settings):
+    """plain_user's Keycloak account, with a password Keycloak can take."""
+    # The hasher of the real app; the test settings use a fast MD5 one.
+    settings.PASSWORD_HASHERS = ["django.contrib.auth.hashers.PBKDF2PasswordHasher"]
+    plain_user.set_password(password)
+    plain_user.save()
+    push_user(plain_user)
+    return keycloak.accounts[plain_user.username]
+
+
+@pytest.mark.django_db
+def test_new_password_reaches_keycloak(
+    account, plain_user, django_capture_on_commit_callbacks
+):
+    with django_capture_on_commit_callbacks(execute=True):
+        plain_user.set_password("N3w-Pass!2024")
+        plain_user.save()
+
+    assert account["credentials"] == [credential_from_hash(plain_user.password)]
+
+
+@pytest.mark.django_db
+def test_saving_without_a_new_password_sends_nothing(
+    account, plain_user, django_capture_on_commit_callbacks
+):
+    first = account["credentials"]
+
+    with django_capture_on_commit_callbacks(execute=True) as callbacks:
+        plain_user.first_name = "Olga"
+        plain_user.save()
+        plain_user.save(update_fields=["last_login"])
+
+    assert callbacks == []
+    assert account["credentials"] is first
+
+
+@pytest.mark.django_db
+def test_password_of_an_unlinked_user_goes_nowhere(keycloak, plain_user):
+    plain_user.set_password("N3w-Pass!2024")
+
+    assert push_password(plain_user) is False
+    assert keycloak.accounts == {}
+
+
+@pytest.mark.django_db
+def test_password_of_an_account_keycloak_lost(keycloak, account, plain_user):
+    keycloak.accounts.clear()
+
+    assert push_password(plain_user) is False
+
+
+@pytest.mark.django_db
+def test_keycloak_down_does_not_undo_the_password_change(
+    keycloak, account, plain_user, django_capture_on_commit_callbacks, caplog
+):
+    keycloak.down = True
+
+    with django_capture_on_commit_callbacks(execute=True):
+        plain_user.set_password("N3w-Pass!2024")
+        plain_user.save()
+
+    plain_user.refresh_from_db()
+    assert plain_user.check_password("N3w-Pass!2024")
+    assert "did not reach Keycloak" in caplog.text
+
+
+@pytest.mark.django_db
+def test_password_change_without_sso_calls_no_keycloak(
+    plain_user, django_capture_on_commit_callbacks
+):
+    with django_capture_on_commit_callbacks(execute=True) as callbacks:
+        plain_user.set_password("N3w-Pass!2024")
+        plain_user.save()
+
+    assert callbacks == []
 
 
 # --- Active Directory behind Keycloak (User Federation) ---
