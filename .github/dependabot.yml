@@ -50,3 +50,11 @@ updates:
     groups:
       compose-images:
         patterns: ["*"]
+    # Majors that break the stack and need work by hand, not a bump:
+    # postgres 18 wants its volume at /var/lib/postgresql and a pg_upgrade
+    # of the data; localstack 2026.x does not start in CI. Minors still come.
+    ignore:
+      - dependency-name: "postgres"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "localstack/localstack"
+        update-types: ["version-update:semver-major"]
