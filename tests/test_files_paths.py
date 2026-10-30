@@ -74,6 +74,10 @@ BAD_NAMES = [
     "pipe|name",
     "star*name",
     "a" * (MAX_NAME_LENGTH + 1),
+    # Shown as "photoexe.jpg": the right-to-left override hides the extension.
+    "photo‮gpj.exe",
+    "zero​width.txt",
+    "del\x7f.txt",
 ]
 
 

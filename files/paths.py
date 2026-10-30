@@ -6,6 +6,7 @@ leads outside the storage root is rejected here, not in the views.
 
 import posixpath
 import re
+import unicodedata
 
 from django.core.exceptions import SuspiciousFileOperation
 
@@ -27,8 +28,8 @@ _DRIVE_LETTER = re.compile(r"^[a-zA-Z]:")
 def clean_name(name: str) -> str:
     """One file or folder name, safe to write into the storage.
 
-    Rejects path separators, control characters, leading and trailing dots,
-    names reserved by Windows, and names that are simply too long.
+    Rejects path separators, control and invisible characters, leading and
+    trailing dots, names reserved by Windows, and names that are simply too long.
     """
     if not isinstance(name, str):
         raise SuspiciousFileOperation("The name must be a string.")
@@ -44,6 +45,11 @@ def clean_name(name: str) -> str:
 
     if _FORBIDDEN_IN_NAME.search(name):
         raise SuspiciousFileOperation("The name contains forbidden characters.")
+
+    # Invisible characters: control (Cc) and format (Cf) ones. A right-to-left
+    # override shows "photo<RLO>gpj.exe" as "photoexe.jpg", hiding the extension.
+    if any(unicodedata.category(char) in ("Cc", "Cf") for char in name):
+        raise SuspiciousFileOperation("The name contains invisible characters.")
 
     # ".", ".." and leading dots: either a way out or invisible clutter.
     if name.strip(".") == "":
