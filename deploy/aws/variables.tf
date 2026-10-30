@@ -18,7 +18,7 @@ variable "instance_type" {
 variable "image" {
   description = "Application Docker image published by CI"
   type        = string
-  default     = "ghcr.io/senpai520120/django_application:latest"
+  default     = "ghcr.io/senpai520120/django-application-e2e:latest"
 }
 
 variable "ssh_cidr" {
