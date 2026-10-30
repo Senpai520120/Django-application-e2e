@@ -571,7 +571,7 @@ and from the button (`workflow_dispatch`). Six jobs:
 | **Django checks** | `manage.py check`, `makemigrations --check` (forgotten migrations), `check --deploy --fail-level WARNING` with the HTTPS flags on |
 | **Tests** | a matrix of Python 3.12 and 3.13, a real PostgreSQL 16 service container, `pytest --cov --cov-fail-under=90`, coverage report in the artifacts |
 | **docker compose up** | starts the stack the way production does and checks the 302 for anonymous visitors on `/manage/` and `/files/`, an admin sign-in, and that the roles are seeded |
-| **E2E (Playwright)** | starts the same stack, installs chromium, runs `pytest e2e` against local storage and S3, and on failure keeps traces, screenshots and videos as an artifact |
+| **E2E (Playwright)** | starts the same stack, installs chromium, runs `pytest e2e` four times — local storage, S3 (localstack), sign-in through Keycloak, Active Directory behind Keycloak — and on failure keeps traces, screenshots and videos as an artifact |
 | **Publish to GHCR** | waits for a green smoke and E2E; for `main` and `v*` tags only: builds the image and pushes it to `ghcr.io/<owner>/<repo>` with the `latest`, `sha-…` and semver tags. Uses the built-in `GITHUB_TOKEN`, so no secrets to configure |
 
 CD goes as far as publishing the image: after that, `docker compose pull &&
@@ -676,7 +676,7 @@ so the address below no longer answers. The proof is kept in
 | | |
 | --- | --- |
 | Address | http://54.167.66.45/ (decommissioned) |
-| Account for a look around | `demo_admin` / `demo-password-123` (the stand ran with `seed_demo_users=true`) |
+| Demo account | `demo_admin` existed only on that stand (it ran with `seed_demo_users=true`) and is gone with it |
 | Region | `us-east-1` |
 | Bucket | `users-and-roles-files-20261029` |
 | Image | `ghcr.io/senpai520120/django-application-e2e:sha-75b13e9` |
@@ -688,6 +688,18 @@ so the address below no longer answers. The proof is kept in
 | [03-files-s3-upload.png](docs/deploy/03-files-s3-upload.png) | `/files/` with `Storage: S3FileStorage`, a folder made and a file uploaded |
 | [04-s3-and-iam.txt](docs/deploy/04-s3-and-iam.txt) | the same folder and file in the bucket (`aws s3 ls`) and the instance role policy limited to that one bucket |
 | [05-terraform-destroy.txt](docs/deploy/05-terraform-destroy.txt) | the teardown: 10 resources destroyed, nothing left in the account |
+
+### Before the first deploy
+
+1. In the AWS console create an IAM user for Terraform (no console access)
+   with `AmazonEC2FullAccess`, `AmazonS3FullAccess` and `IAMFullAccess`, and
+   an access key for it. Never commit the key or paste it anywhere.
+2. `aws configure` with that key and the region you deploy to (`us-east-1`).
+3. `aws sts get-caller-identity` must name that user.
+4. In EC2 → Key Pairs of the same region, create a key pair; its name goes
+   into `-var key_name=...`.
+
+After `terraform destroy`, delete the access key (or the whole user) too.
 
 ### Steps
 
@@ -801,12 +813,14 @@ Outside the scope of the assignment:
 
 * user registration through a public UI — accounts are created by an admin or by
   `createsuperuser`;
-* password recovery and email confirmation (SSO was out of scope at first and
-  was added later on request, see "Sign-in through Keycloak (SSO)");
+* password recovery and email confirmation;
 * a REST API, an SPA, JS frameworks;
 * a separate `Role` model — a role is an `auth.Group`, and duplicating it buys
   nothing (should a role need a description, we would add `Role` with a
   `OneToOne` to `Group`).
+
+SSO was outside the first assignment too; it was added later on request, see
+"Sign-in through Keycloak (SSO)".
 
 Django's stock `/admin/` is enabled, but the assignment is solved by our own
 `/manage/` page.
