@@ -206,60 +206,30 @@ jobs:
           pip install -r e2e/requirements.txt
           python -m playwright install --with-deps chromium
 
+      # E2E_AUTH is left unset on purpose: the tests read the sign-in mode from
+      # the running stack, and each run first checks that they read it right.
       - name: Run E2E (local storage)
-        env:
-          BASE_URL: http://127.0.0.1:8000
-          E2E_MAX_FILE_SIZE: "5242880"
-        run: pytest e2e --output=test-results/local
+        run: |
+          python e2e/tools/expect_auth.py local
+          pytest e2e --output=test-results/local
 
       # The same set of scenarios against S3 mode. No real AWS needed: the
-      # bucket is played by localstack from the s3 profile in docker-compose.
+      # bucket is played by localstack from docker-compose.s3.yml.
       - name: Restart the stack in S3 mode
-        env:
-          AWS_ACCESS_KEY_ID: test
-          AWS_SECRET_ACCESS_KEY: test
-          AWS_DEFAULT_REGION: us-east-1
         run: |
           docker compose down -v
-          KEY=$(python -c "import secrets; print(secrets.token_urlsafe(64))")
-          cat > .env <<ENV
-          SECRET_KEY=$KEY
-          FILE_STORAGE_BACKEND=s3
-          FILE_MANAGER_S3_LOCATION=filemanager
-          AWS_STORAGE_BUCKET_NAME=e2e-bucket
-          AWS_S3_REGION_NAME=us-east-1
-          AWS_S3_ENDPOINT_URL=http://localstack:4566
-          AWS_S3_ADDRESSING_STYLE=path
-          AWS_ACCESS_KEY_ID=test
-          AWS_SECRET_ACCESS_KEY=test
-          ENV
-          FILE_STORAGE_BACKEND=s3 docker compose --profile s3 up -d --build
-
-          for _ in $(seq 1 40); do
-            if curl -sf http://127.0.0.1:4566/_localstack/health > /dev/null; then break; fi
-            sleep 3
-          done
-          aws --endpoint-url=http://127.0.0.1:4566 s3 mb s3://e2e-bucket
-
-          for _ in $(seq 1 30); do
-            code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/login/ || true)
-            if [ "$code" = "200" ]; then exit 0; fi
-            sleep 2
-          done
-          echo "the app never came up in S3 mode"
-          exit 1
+          docker compose -f docker-compose.yml -f docker-compose.s3.yml up -d --build --wait
 
       - name: Run E2E (S3 through localstack)
-        env:
-          BASE_URL: http://127.0.0.1:8000
-          E2E_MAX_FILE_SIZE: "5242880"
-        run: pytest e2e --output=test-results/s3
+        run: |
+          python e2e/tools/expect_auth.py local
+          pytest e2e --output=test-results/s3
 
       # Sign-in through Keycloak: the same scenarios plus tests/test_sso.py.
       # The realm and its accounts come from keycloak/realm-myapp.json.
       - name: Restart the stack in SSO mode
         run: |
-          docker compose --profile s3 down -v
+          docker compose -f docker-compose.yml -f docker-compose.s3.yml down -v
           KEY=$(python -c "import secrets; print(secrets.token_urlsafe(64))")
           printf 'SECRET_KEY=%s\n' "$KEY" > .env
           # --wait: up returns once Keycloak and the app pass their healthchecks.
@@ -267,11 +237,9 @@ jobs:
           curl -sf http://localhost:8080/realms/myapp/.well-known/openid-configuration > /dev/null
 
       - name: Run E2E (Keycloak SSO)
-        env:
-          BASE_URL: http://127.0.0.1:8000
-          E2E_AUTH: keycloak
-          E2E_MAX_FILE_SIZE: "5242880"
-        run: pytest e2e --output=test-results/sso
+        run: |
+          python e2e/tools/expect_auth.py keycloak
+          pytest e2e --output=test-results/sso
 
       # Active Directory behind Keycloak: Samba plays the domain controller.
       # The same scenarios plus tests/test_ad.py, which add people to AD.
@@ -281,11 +249,9 @@ jobs:
           docker compose -f docker-compose.yml -f docker-compose.sso.yml             -f docker-compose.ad.yml up -d --build --wait
 
       - name: Run E2E (Active Directory)
-        env:
-          BASE_URL: http://127.0.0.1:8000
-          E2E_AUTH: ad
-          E2E_MAX_FILE_SIZE: "5242880"
-        run: pytest e2e --output=test-results/ad
+        run: |
+          python e2e/tools/expect_auth.py ad
+          pytest e2e --output=test-results/ad
 
       - name: Traces, screenshots and videos of failed tests
         if: failure()
@@ -295,9 +261,14 @@ jobs:
           path: test-results/
           retention-days: 7
 
+      # Each mode is a stack of its own; whichever one failed is still there.
       - name: Container logs
         if: failure()
-        run: docker compose -f docker-compose.yml -f docker-compose.sso.yml -f docker-compose.ad.yml logs
+        run: |
+          for c in $(docker ps -aq); do
+            echo "=== $(docker inspect -f '{{.Name}}' "$c")"
+            docker logs --tail 300 "$c" 2>&1
+          done
 
       - name: Shut the stack down
         if: always()
