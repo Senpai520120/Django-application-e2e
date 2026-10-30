@@ -1,4 +1,8 @@
-name: users-and-roles
+# Stack 1 of 4: the app's own sign-in form, files on the server disk.
+# The other modes lay one more file over this one, each a stack of its own:
+#   2-s3 docker-compose.s3.yml, 3-keycloak docker-compose.sso.yml,
+#   4-keycloak-ad docker-compose.sso.yml + docker-compose.ad.yml.
+name: users-and-roles-1-local
 
 services:
   db:

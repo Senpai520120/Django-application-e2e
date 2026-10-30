@@ -4,8 +4,8 @@
 # Nothing to change in .env: the bucket and the dummy keys are set here, and
 # LocalStack makes the bucket on every start (docker/localstack/init-s3.sh).
 
-# A stack of its own, so Docker Desktop lists it apart from the other modes.
-name: users-and-roles-s3
+# A stack of its own in Docker Desktop: stack 2 of 4, own sign-in form, files in S3.
+name: users-and-roles-2-s3
 
 services:
   localstack:
