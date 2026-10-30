@@ -20,7 +20,7 @@ select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "DJ"]
 "*/migrations/*" = ["E501"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["accounts", "config", "panel"]
+known-first-party = ["accounts", "config", "files", "panel"]
 
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "config.settings_test"

@@ -2,71 +2,38 @@
 
 Updated: 2026-10-29.
 
-## Now: nothing open; all three assignments are done
+## Now: assignments done; small open items are under "Next"
 
 ## Done: deploy to AWS EC2 (proof for assignment #22, PR #103)
 
-Done 2026-10-29: the stand ran at http://54.167.66.45/ (`t3.micro`, bucket
-`users-and-roles-files-20261029`), proof is in `docs/deploy/` (screenshots,
-`aws s3 ls`, role policy, destroy output) and linked from README. Destroyed;
-AWS CLI shows nothing left. The IAM user `terraform-deploy` is deleted too, so
-the keys in `~/.aws` no longer work: a new deploy needs a new IAM user.
+Done 2026-10-29: the stand ran at http://54.167.66.45/ (`t3.micro`), proof is
+in `docs/deploy/` (screenshots, `aws s3 ls`, role policy, destroy output) and
+linked from README "The live stand". Destroyed; AWS CLI showed nothing left.
+The IAM user used for the deploy is deleted, so the keys in `~/.aws` no longer
+work: a new deploy needs a new IAM user (README "Deploying to AWS" ->
+"Before the first deploy").
 Checked against the texts of all three tasks (users & roles, file manager,
-Keycloak SSO): every requirement is covered; CI green in all 4 E2E modes.
-`terraform apply/destroy` are blocked for Claude in auto mode; the user runs
-them. In PowerShell quote `-var` values that contain dots. Write commit
-messages with the Write tool: `Set-Content -Encoding utf8` adds a BOM.
-The stand has no Keycloak on purpose (only `db` + `web`, `OIDC_ENABLED` off):
-t3.micro has 1 GB RAM and OIDC needs HTTPS and a stable hostname.
+Keycloak SSO): every requirement is covered; CI green in all 4 E2E modes
+(local, S3, Keycloak, AD).
 
-The plan below is kept as a record.
-
-The one deliverable still missing: assignment #22 wants a live link or
-screenshots/video of the app working in S3 mode. README "The live stand" still
-says "decommissioned" and the repo has no media.
-
-State on 2026-10-29:
-- `main` = `75b13e9`: PR #99 brought everything from `e2e-test` (Python E2E,
-  review fixes, Keycloak, AD). CI on `main` is green.
-- Image: `ghcr.io/senpai520120/django-application-e2e:sha-75b13e9` (public).
-  Deploy that exact tag, not `latest`. The Terraform default `image` still
-  points to the old repo, so always pass `-var image=...`.
-- Terraform 1.16.6 and AWS CLI 2.39 are installed (winget). `terraform validate`
-  in `deploy/aws` passes; local state is empty (the old stand was destroyed).
-  In the VS Code terminal they may be missing from PATH until VS Code restarts:
-  `$env:Path = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [Environment]::GetEnvironmentVariable("Path","User")`.
-- AWS access (done 2026-10-29): IAM user `terraform-deploy` in account
-  126309363611 with `AmazonEC2FullAccess`, `AmazonS3FullAccess`, `IAMFullAccess`.
-  Its access key is in `~/.aws` (`aws configure`, region `us-east-1`);
-  `aws sts get-caller-identity` answers with that user. Delete this access key
-  after `terraform destroy`. Never paste keys in chat.
-- SSH key pair `django_application` exists in `us-east-1`; the private key is
-  in the user's `.ssh` folder (`django_application.pem`).
+Notes for a next deploy:
 - The user wants to stay inside the AWS free tier: destroy right after the proof.
+- SSH key pair `django_application` exists in `us-east-1` (a key pair belongs to
+  a region); the private key is `django_application.pem` in the user's `.ssh`
+  folder. Pass `-var key_name=django_application`.
+- Deploy an exact image tag (`-var image=ghcr.io/senpai520120/django-application-e2e:sha-...`)
+  so the stand runs a known build.
+- `terraform apply/destroy` are blocked for Claude in auto mode; the user runs
+  them. In PowerShell quote `-var` values that contain dots.
+- Terraform and AWS CLI are installed (winget). In the VS Code terminal they may
+  be missing from PATH until VS Code restarts:
+  `$env:Path = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [Environment]::GetEnvironmentVariable("Path","User")`.
+- The stand has no Keycloak on purpose (only `db` + `web`, `OIDC_ENABLED` off):
+  t3.micro has 1 GB RAM and OIDC needs HTTPS and a stable hostname.
 
-Plan (cost: t3.micro, free tier or ~1 cent/hour; `terraform apply` only after the
-user says yes):
-1. `aws sts get-caller-identity` (expect `user/terraform-deploy`).
-2. `cd deploy/aws && terraform apply -var region=us-east-1
-   -var bucket_name=users-and-roles-files-<suffix> -var key_name=django_application
-   -var image=ghcr.io/senpai520120/django-application-e2e:sha-75b13e9
-   -var seed_demo_users=true` (demo accounts only for the showing).
-3. Wait 2-3 min, open `app_url`. Screenshots/video:
-   sign-in as `demo_admin`, `/manage/`, `/files/` with "Storage: S3FileStorage",
-   create a folder + upload a file, `aws s3 ls s3://<bucket>/filemanager/ --recursive`,
-   the instance IAM role policy (4 actions on one bucket), `terraform destroy` output.
-4. Put them in `docs/deploy/`, link them from README "The live stand", PR to `main`.
-5. `terraform destroy` with the same vars; run the README teardown checklist.
-
-Dependabot, open question: PRs #12 and #100 were closed (localstack 3 -> 2026.x
-does not start in CI; postgres 16 -> 18 fails because the 18 image wants the
-volume at `/var/lib/postgresql`, not `.../data`, and needs `pg_upgrade`). Offered,
-not done: ignore major updates of `postgres` and `localstack` in
-`.github/dependabot.yml`, and bump `keycloak` 26.4 -> 26.8 on its own.
-PR #9 (npm for the old TypeScript e2e) closed.
-
-Permissions: auto mode does not let Claude merge or close PRs; the user does it
-in the GitHub UI ("Create a merge commit", never squash: history is graded).
+Git: auto mode does not let Claude merge or close PRs; the user does it in the
+GitHub UI ("Create a merge commit", never squash: history is graded). Write
+commit messages with the Write tool: `Set-Content -Encoding utf8` adds a BOM.
 
 ## Done: sign-in through Keycloak (SSO)
 
@@ -107,11 +74,15 @@ Tests: 228 unit tests, coverage 93%. E2E with `E2E_AUTH=keycloak`: 42 passed,
   `users_roles_csrftoken`): AUTOforYOU on localhost overwrote Django's default
   ones and Sign out failed with CSRF 403. E2E TC-57..59 cover it.
 - Checked: 242 unit tests, coverage 93%; E2E SSO 45, AD 50 passed.
-  CI has a fourth E2E run (AD) - not yet run on GitHub.
+  The fourth E2E run in CI (AD) is green on `main`.
 
 ## Next
 
-- Deploy to EC2, see "Now" above.
+- Dependabot, open question: PRs #12 and #100 were closed (localstack 3 -> 2026.x
+  does not start in CI; postgres 16 -> 18 fails because the 18 image wants the
+  volume at `/var/lib/postgresql`, not `.../data`, and needs `pg_upgrade`).
+  Offered, not done: ignore major updates of `postgres` and `localstack` in
+  `.github/dependabot.yml`, and bump `keycloak` 26.4 -> 26.8 on its own.
 - Optional: turn the recorded codegen test into proper tests: start from
   `page.goto("/")`, use the fixtures (`admin_page`, `new_user`, `workspace`,
   `make_file`) and `unique_name()`, and drop the one-time Keycloak URLs.
