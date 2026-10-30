@@ -500,38 +500,6 @@ pytest e2e --browser firefox --browser webkit
 pytest e2e --headed --slowmo 500            # watch it in a real window
 ```
 
-### One stack per mode
-
-Each mode is a compose stack with a name of its own, so Docker Desktop lists
-four groups. Make them once (`--no-start` builds and creates, starts nothing):
-
-```bash
-docker compose up --no-start --build                                              # users-and-roles
-docker compose -f docker-compose.yml -f docker-compose.s3.yml up --no-start --build  # users-and-roles-s3
-docker compose -f docker-compose.yml -f docker-compose.sso.yml up --no-start --build # users-and-roles-sso
-docker compose -f docker-compose.yml -f docker-compose.sso.yml \
-  -f docker-compose.ad.yml up --no-start --build                                  # users-and-roles-ad
-```
-
-Then switch modes with the stop and start buttons of Docker Desktop (or
-`docker compose -p users-and-roles-sso start` / `stop`) and run `pytest e2e`.
-
-| Stack | Sign-in | Files | Runs on top of the common tests | Skipped |
-| --- | --- | --- | --- | --- |
-| `users-and-roles` | the app's own form | disk | — | `test_sso.py`, `test_ad.py` |
-| `users-and-roles-s3` | the app's own form | S3 (LocalStack) | — | `test_sso.py`, `test_ad.py` |
-| `users-and-roles-sso` | Keycloak | disk | `test_sso.py` | own-form tests, `test_ad.py` |
-| `users-and-roles-ad` | Keycloak + AD | disk | `test_sso.py`, `test_ad.py` | own-form tests |
-
-* Only one stack runs at a time: all of them publish the app on port 8000.
-* Start does not rebuild. After changing the code, run that stack's
-  `up --no-start --build` line again.
-* The tests find the mode themselves: `/login/` handing over to Keycloak means
-  SSO, and an answering LDAPS port (6636) means AD. The first line of a run
-  says what was found (`sign-in mode: keycloak (detected)`). `E2E_AUTH=local`,
-  `keycloak` or `ad` forces a mode; detection asks `BASE_URL`, so against
-  another host set `BASE_URL` rather than `--base-url`.
-
 The app under test is started by the same `docker compose` as usual. The tests
 sign in as the `seed_demo_users` accounts (`demo_admin`, `demo_user`,
 `demo_inactive`) with the password above, overridable through `E2E_PASSWORD`.
