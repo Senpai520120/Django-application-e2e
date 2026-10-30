@@ -1,6 +1,6 @@
 """Sign-in with Active Directory accounts, through Keycloak.
 
-Runs only against the stack with docker-compose.ad.yml and E2E_AUTH=ad.
+Runs only against the AD stack (docker-compose.ad.yml), detected or E2E_AUTH=ad.
 Keycloak reads AD (User Federation): AD decides who you are and checks the
 password; roles stay in the app's panel. Each test adds its own person to AD
 (directory.py), as the domain's administrator would, and removes them after.
@@ -19,7 +19,7 @@ from pages.user_create_page import UserCreatePage
 from pages.users_page import UsersPage
 
 pytestmark = pytest.mark.skipif(
-    not config.AD, reason="only with E2E_AUTH=ad (docker-compose.ad.yml)"
+    not config.AD, reason="only against the AD stack (docker-compose.ad.yml)"
 )
 
 AD_PASSWORD = "Ad-Pass-2024!"

@@ -35,6 +35,11 @@ def base_url(pytestconfig) -> str:
     return pytestconfig.getoption("base_url") or config.BASE_URL
 
 
+def pytest_report_header():
+    """The first lines of a run say which sign-in mode the tests are in."""
+    return f"sign-in mode: {config.AUTH} ({config.AUTH_SOURCE}), app: {config.BASE_URL}"
+
+
 # --- signed-in browser tabs ---
 
 

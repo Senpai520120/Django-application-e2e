@@ -1,6 +1,6 @@
 """Sign-in through Keycloak (SSO).
 
-Runs only against the stack with docker-compose.sso.yml and E2E_AUTH=keycloak.
+Runs only against an SSO stack (docker-compose.sso.yml), detected or E2E_AUTH=keycloak.
 Keycloak answers "who you are"; roles and switching a user off stay in the
 app's panel. These tests check both halves.
 """
@@ -19,7 +19,7 @@ from pages.user_roles_page import UserRolesPage
 from pages.users_page import UsersPage
 
 pytestmark = pytest.mark.skipif(
-    not config.SSO, reason="only with E2E_AUTH=keycloak (docker-compose.sso.yml)"
+    not config.SSO, reason="only against an SSO stack (docker-compose.sso.yml)"
 )
 
 ACCESS_DENIED = "403 — access denied"

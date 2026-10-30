@@ -5,6 +5,10 @@ tests run against any copy of the app without editing the code.
 """
 
 import os
+import socket
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 
 # Address of the app under test. Used by the base_url fixture in conftest.py;
@@ -34,15 +38,6 @@ INACTIVE_USER = User("demo_inactive")  # switched off, cannot sign in
 
 # --- sign-in through Keycloak (docker-compose.sso.yml) ---
 
-# E2E_AUTH=keycloak: the app sends sign-in to Keycloak, and the tests fill
-# the Keycloak form instead of the app's own. Tests of the app's own form
-# are skipped then, and tests/test_sso.py runs.
-# E2E_AUTH=ad: the same, with Active Directory behind Keycloak
-# (docker-compose.ad.yml), and tests/test_ad.py runs too.
-AUTH = os.getenv("E2E_AUTH", "local")
-SSO = AUTH in ("keycloak", "ad")
-AD = AUTH == "ad"
-
 # The realm as the browser sees it.
 KEYCLOAK_URL = os.getenv("KEYCLOAK_URL", "http://localhost:8080/realms/myapp")
 
@@ -59,3 +54,47 @@ AD_ADMIN = os.getenv("E2E_AD_ADMIN", "Administrator@corp.example.test")
 AD_ADMIN_PASSWORD = os.getenv("E2E_AD_ADMIN_PASSWORD", "Samba-admin-123")
 AD_USERS_DN = "CN=Users,DC=corp,DC=example,DC=test"
 AD_EMAIL_DOMAIN = "corp.example.test"
+
+# --- which sign-in the app under test uses ---
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def detect_auth() -> str:
+    """The sign-in mode of the running stack, read from the app itself.
+
+    With SSO on, /login/ hands over to /oidc/authenticate/ instead of showing
+    the app's own form. AD is told apart by its LDAPS port, which only the
+    stack with docker-compose.ad.yml publishes. An app that does not answer
+    counts as "local": the tests then fail on it with a clear error.
+    """
+    opener = urllib.request.build_opener(_NoRedirect)
+    try:
+        opener.open(f"{BASE_URL}/login/", timeout=5)
+        return "local"
+    except urllib.error.HTTPError as error:
+        if "/oidc/" not in error.headers.get("Location", ""):
+            return "local"
+    except OSError:
+        return "local"
+
+    ad = urllib.parse.urlparse(AD_URL)
+    try:
+        socket.create_connection((ad.hostname, ad.port or 636), timeout=2).close()
+    except OSError:
+        return "keycloak"
+    return "ad"
+
+
+# local: the app's own sign-in form; tests/test_sso.py and test_ad.py are skipped.
+# keycloak: the tests fill the Keycloak form instead; tests of the app's own
+#   form are skipped, tests/test_sso.py runs.
+# ad: the same, with Active Directory behind Keycloak; tests/test_ad.py runs too.
+# E2E_AUTH forces a mode; unset, it is read from the running stack.
+AUTH_SOURCE = "E2E_AUTH" if os.getenv("E2E_AUTH") else "detected"
+AUTH = os.getenv("E2E_AUTH") or detect_auth()
+SSO = AUTH in ("keycloak", "ad")
+AD = AUTH == "ad"
