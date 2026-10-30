@@ -158,6 +158,8 @@ class RenameView(FileManagerMixin, FormView):
         context = super().get_context_data(**kwargs)
         if not self.path:
             raise Http404("Nothing to rename.")
+        if not self.storage.exists(self.path):
+            raise Http404("File or folder not found.")
         context.update(
             path=self.path,
             name=self.path.rsplit("/", 1)[-1],

@@ -287,6 +287,14 @@ def test_rename_page_shows_current_name(user_client):
 
 
 @pytest.mark.django_db
+def test_rename_of_missing_path_is_404(user_client):
+    """The same answer as the delete page gives: nothing there, nothing to rename."""
+    response = user_client.get(reverse("files:rename"), {"path": "nope.txt"})
+
+    assert response.status_code == 404
+
+
+@pytest.mark.django_db
 def test_delete_asks_for_confirmation_first(user_client):
     user_client.post(
         reverse("files:upload"),
