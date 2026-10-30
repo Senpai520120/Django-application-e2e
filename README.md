@@ -20,9 +20,9 @@ What is written by hand: the panel, the access control and the templates.
 | Roles | built-in `auth.Group` |
 | File storage | `FileSystemStorage` or S3 through django-storages, picked by an environment variable |
 | Configuration | `django-environ`, everything from the environment |
-| Tests | pytest + pytest-django, 157 tests, 95% coverage |
+| Tests | pytest + pytest-django, coverage at least 90% (enforced by CI) |
 | Lint | ruff + black, run by hand and in CI |
-| E2E | pytest + Playwright (chromium), sign-in, panel and file manager scenarios |
+| E2E | pytest + Playwright (chromium), sign-in, panel and file manager scenarios, also through Keycloak and Active Directory |
 | CI/CD | GitHub Actions: linters → Django checks → tests → docker compose smoke → image published to GHCR |
 
 ## Quick start
@@ -291,9 +291,9 @@ Every line above is covered by tests: `tests/test_files_paths.py`,
 ## Tests
 
 ```bash
-pytest                                  # 167 tests
+pytest                                  # every test in tests/
 pytest -v
-pytest --cov --cov-report=term-missing  # coverage (95% right now)
+pytest --cov --cov-report=term-missing  # coverage; below 90% fails, as in CI
 ```
 
 The suite uses `config/settings_test.py`: its own `SECRET_KEY`, static files
@@ -324,7 +324,13 @@ What is covered:
   the local disk and against S3 through `moto`. The same set of checks, two
   different implementations;
 * `tests/test_files_views.py` — anonymous access, size limits, the attachment
-  header on download, recursive deletion, and 400 on a path leading outside.
+  header on download, recursive deletion, and 400 on a path leading outside;
+* `tests/test_oidc.py` — sign-in through Keycloak with its answers faked:
+  linking by `sub`, never linking admins by name, refused and disabled users,
+  sign-out ending the Keycloak session;
+* `tests/test_keycloak_admin.py` — the Admin API calls with HTTP faked:
+  accounts made with the Django password hash, password changes, Keycloak
+  being down.
 
 The test environment lives in `config/settings_test.py`; the user fixtures are in
 `tests/conftest.py`.
@@ -516,7 +522,7 @@ e2e/
 │                      folder per file test, cleanup after each test
 ├── helpers.py         unique names, sign-in, sending a form straight to the server
 ├── pages/             Page Objects: login, home, users, roles, audit, files
-├── docs/test-cases.md TC-01 … TC-43, the description of every scenario
+├── docs/test-cases.md TC-01 … TC-60, the description of every scenario
 ├── tools/             test_cases.json (the source of the cases) and a script that
 │                      writes docs/test-cases.md or opens "Test case" issues:
 │                      cd e2e && python tools/create_test_case_issues.py --markdown
@@ -526,7 +532,9 @@ e2e/
     ├── test_users.py     search, create, weak password, switching a user off
     ├── test_roles.py     grant and revoke a role, self-lockout ban, audit log
     ├── test_folders.py   create, nest, breadcrumbs, duplicates, delete
-    └── test_files.py     upload, rename, download, delete, the size limit
+    ├── test_files.py     upload, rename, download, delete, the size limit
+    ├── test_sso.py       the Keycloak form, single sign-on and sign-out (E2E_AUTH=keycloak)
+    └── test_ad.py        Active Directory people signing in through Keycloak (E2E_AUTH=ad)
 ```
 
 Every file test works in a folder of its own with a unique name and deletes it
@@ -806,6 +814,16 @@ tests/            pytest-django
   column of their own.
 * There is no custom 400 page. 403, 404 and 500 have templates, so a rejected
   path shows Django's plain `Bad Request (400)` in production.
+* The AWS stand served plain HTTP on port 80, so the sign-in form sent the
+  password unencrypted. That was acceptable for a short demo with demo
+  accounts only. In production TLS would come first (an ALB with an ACM
+  certificate, or Caddy with Let's Encrypt in front of gunicorn), followed by
+  `SESSION_COOKIE_SECURE`, `CSRF_COOKIE_SECURE`, `SECURE_SSL_REDIRECT` and HSTS,
+  which CI already checks with `check --deploy`.
+* The total size limit is counted on every upload by walking the whole storage
+  (`rglob` on disk, a listing of every key in S3). That is fine for a team's
+  share. With many thousands of files the total would be kept in the database
+  and updated on save and delete instead.
 
 ## What was left out
 
