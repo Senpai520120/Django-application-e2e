@@ -265,11 +265,12 @@ AWS_S3_REGION_NAME=eu-central-1
 
 The keys can be left out when the app runs on EC2 with an IAM role: boto3 picks
 up temporary credentials from the instance metadata. To exercise S3 mode locally
-without a cloud, use localstack:
+without a cloud, lay `docker-compose.s3.yml` over the main file. It adds
+LocalStack, which makes the bucket on every start, and sets the S3 variables
+itself, so `.env` stays as it is:
 
 ```bash
-docker compose --profile s3 up --build
-# additionally in .env: AWS_S3_ENDPOINT_URL=http://localstack:4566
+docker compose -f docker-compose.yml -f docker-compose.s3.yml up -d --build --wait
 ```
 
 ### Security
@@ -426,7 +427,7 @@ The secret `dev-only-secret` is for local runs only. The app talks to Keycloak
 at two addresses (`OIDC_BROWSER_URL` for the browser, `OIDC_BACKEND_URL` from
 inside docker); outside docker both are the same and only the first is needed.
 
-E2E in this mode: `E2E_AUTH=keycloak pytest e2e`. The fixtures sign in through
+E2E in this mode: `pytest e2e` (the mode is detected). The fixtures sign in through
 the Keycloak form, tests of the app's own form are skipped, and
 `e2e/tests/test_sso.py` runs (TC-44…51).
 
@@ -476,7 +477,7 @@ sign-in links them again), and the old password stops working at once after
 a change (AD normally allows it for another hour: `old password allowed
 period`).
 
-E2E in this mode: `E2E_AUTH=ad pytest e2e`: everything of the SSO mode plus
+E2E in this mode: `pytest e2e` (the mode is detected): everything of the SSO mode plus
 `e2e/tests/test_ad.py` (TC-52…56), which adds people to AD over LDAPS as the
 domain administrator would (`e2e/directory.py`).
 
@@ -498,6 +499,38 @@ pytest e2e --base-url http://host:port      # against another copy of the app
 pytest e2e --browser firefox --browser webkit
 pytest e2e --headed --slowmo 500            # watch it in a real window
 ```
+
+### One stack per mode
+
+Each mode is a compose stack with a name of its own, so Docker Desktop lists
+four groups. Make them once (`--no-start` builds and creates, starts nothing):
+
+```bash
+docker compose up --no-start --build                                              # users-and-roles
+docker compose -f docker-compose.yml -f docker-compose.s3.yml up --no-start --build  # users-and-roles-s3
+docker compose -f docker-compose.yml -f docker-compose.sso.yml up --no-start --build # users-and-roles-sso
+docker compose -f docker-compose.yml -f docker-compose.sso.yml \
+  -f docker-compose.ad.yml up --no-start --build                                  # users-and-roles-ad
+```
+
+Then switch modes with the stop and start buttons of Docker Desktop (or
+`docker compose -p users-and-roles-sso start` / `stop`) and run `pytest e2e`.
+
+| Stack | Sign-in | Files | Runs on top of the common tests | Skipped |
+| --- | --- | --- | --- | --- |
+| `users-and-roles` | the app's own form | disk | — | `test_sso.py`, `test_ad.py` |
+| `users-and-roles-s3` | the app's own form | S3 (LocalStack) | — | `test_sso.py`, `test_ad.py` |
+| `users-and-roles-sso` | Keycloak | disk | `test_sso.py` | own-form tests, `test_ad.py` |
+| `users-and-roles-ad` | Keycloak + AD | disk | `test_sso.py`, `test_ad.py` | own-form tests |
+
+* Only one stack runs at a time: all of them publish the app on port 8000.
+* Start does not rebuild. After changing the code, run that stack's
+  `up --no-start --build` line again.
+* The tests find the mode themselves: `/login/` handing over to Keycloak means
+  SSO, and an answering LDAPS port (6636) means AD. The first line of a run
+  says what was found (`sign-in mode: keycloak (detected)`). `E2E_AUTH=local`,
+  `keycloak` or `ad` forces a mode; detection asks `BASE_URL`, so against
+  another host set `BASE_URL` rather than `--base-url`.
 
 The app under test is started by the same `docker compose` as usual. The tests
 sign in as the `seed_demo_users` accounts (`demo_admin`, `demo_user`,
@@ -533,8 +566,8 @@ e2e/
     ├── test_roles.py     grant and revoke a role, self-lockout ban, audit log
     ├── test_folders.py   create, nest, breadcrumbs, duplicates, delete
     ├── test_files.py     upload, rename, download, delete, the size limit
-    ├── test_sso.py       the Keycloak form, single sign-on and sign-out (E2E_AUTH=keycloak)
-    └── test_ad.py        Active Directory people signing in through Keycloak (E2E_AUTH=ad)
+    ├── test_sso.py       the Keycloak form, single sign-on and sign-out (SSO stack)
+    └── test_ad.py        Active Directory people signing in through Keycloak (AD stack)
 ```
 
 Every file test works in a folder of its own with a unique name and deletes it
