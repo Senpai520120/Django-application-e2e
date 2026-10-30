@@ -1,6 +1,6 @@
 # Progress
 
-Updated: 2026-10-29.
+Updated: 2026-10-30.
 
 ## Now: assignments done; small open items are under "Next"
 
@@ -76,16 +76,25 @@ Tests: 228 unit tests, coverage 93%. E2E with `E2E_AUTH=keycloak`: 42 passed,
 - Checked: 242 unit tests, coverage 93%; E2E SSO 45, AD 50 passed.
   The fourth E2E run in CI (AD) is green on `main`.
 
+## Done: review against the assignments (PR #107, 2026-10-30)
+
+Fixed: rename page 404 for a missing path; names with Unicode Cc/Cf
+characters refused (RLO hid extensions); test settings default
+`OIDC_ENABLED`/`FILE_STORAGE_BACKEND` off so a local `.env` cannot change the
+suite; Terraform default image; README test sections and limitations.
+Dependabot now ignores `postgres` and `localstack` majors (#106 closed by
+itself; #108 brings only keycloak 26.8, green). Local `.venv` is Python 3.12.
+Checked: 255 unit tests, coverage 93.6%; CI green in all 4 E2E modes.
+
 ## Next
 
-- Dependabot, open question: PRs #12 and #100 were closed (localstack 3 -> 2026.x
-  does not start in CI; postgres 16 -> 18 fails because the 18 image wants the
-  volume at `/var/lib/postgresql`, not `.../data`, and needs `pg_upgrade`).
-  Offered, not done: ignore major updates of `postgres` and `localstack` in
-  `.github/dependabot.yml`, and bump `keycloak` 26.4 -> 26.8 on its own.
+- Open Dependabot PRs: #108 (keycloak 26.4 -> 26.8, CI green) and #109
+  (ruff 0.17.3); the user merges them in the GitHub UI.
 - Optional: turn the recorded codegen test into proper tests: start from
   `page.goto("/")`, use the fixtures (`admin_page`, `new_user`, `workspace`,
   `make_file`) and `unique_name()`, and drop the one-time Keycloak URLs.
+- Optional bonuses of assignment #2 not done: previews, upload progress bar,
+  search, moving items, zip download, drag-and-drop.
 
 ## Known and left as is
 
