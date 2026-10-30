@@ -1,0 +1,40 @@
+# The file manager in S3 mode, against LocalStack instead of AWS. Laid over
+# the main file:
+#   docker compose -f docker-compose.yml -f docker-compose.s3.yml up -d --build --wait
+# Nothing to change in .env: the bucket and the dummy keys are set here, and
+# LocalStack makes the bucket on every start (docker/localstack/init-s3.sh).
+
+# A stack of its own, so Docker Desktop lists it apart from the other modes.
+name: users-and-roles-s3
+
+services:
+  localstack:
+    # In the main file it waits behind the "s3" profile; here it is always on.
+    profiles: !reset []
+    environment:
+      AWS_DEFAULT_REGION: us-east-1
+    volumes:
+      - ./docker/localstack/init-s3.sh:/etc/localstack/init/ready.d/init-s3.sh:ro
+    healthcheck:
+      # Healthy once the init hook has made the bucket, not just once S3 answers.
+      test: ["CMD", "awslocal", "s3api", "head-bucket", "--bucket", "users-and-roles-files"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+  web:
+    environment:
+      FILE_STORAGE_BACKEND: s3
+      FILE_MANAGER_S3_LOCATION: filemanager
+      AWS_STORAGE_BUCKET_NAME: users-and-roles-files
+      AWS_S3_REGION_NAME: us-east-1
+      AWS_S3_ENDPOINT_URL: http://localstack:4566
+      # LocalStack cannot do virtual-hosted addressing.
+      AWS_S3_ADDRESSING_STYLE: path
+      # LocalStack takes any keys; these are not AWS credentials.
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+    depends_on:
+      localstack:
+        condition: service_healthy

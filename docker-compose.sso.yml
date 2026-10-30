@@ -3,6 +3,9 @@
 # Keycloak admin console: http://localhost:8080/admin (admin / admin).
 # Demo accounts and the realm come from keycloak/realm-myapp.json.
 
+# A stack of its own, so Docker Desktop lists it apart from the other modes.
+name: users-and-roles-sso
+
 services:
   keycloak:
     image: quay.io/keycloak/keycloak:26.8

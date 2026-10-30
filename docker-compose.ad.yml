@@ -5,6 +5,9 @@
 # LDAPS (User Federation, read only). Roles stay in the app's panel.
 # Test accounts: ad_alice, ad_bob, ad_disabled (disabled), all demo-password-123.
 
+# A stack of its own, so Docker Desktop lists it apart from the other modes.
+name: users-and-roles-ad
+
 services:
   samba:
     build: docker/samba
