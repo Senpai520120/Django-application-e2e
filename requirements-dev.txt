@@ -5,3 +5,5 @@ pytest-cov>=7.1.0
 moto[s3]>=5.2.4
 ruff>=0.17.3
 black>=26.10.1
+# The grouping of airflow/dags/upload_groups.py runs in tests too.
+duckdb>=2.0.0

@@ -242,6 +242,12 @@ AWS_DEFAULT_ACL = None
 AWS_S3_FILE_OVERWRITE = False
 AWS_QUERYSTRING_AUTH = True
 
+# Processing of uploaded CSV files in Airflow (docker-compose.airflow.yml).
+# Left empty, uploads are only saved and never sent anywhere.
+AIRFLOW_API_URL = env("AIRFLOW_API_URL", default="")
+AIRFLOW_USERNAME = env("AIRFLOW_USERNAME", default="")
+AIRFLOW_PASSWORD = env("AIRFLOW_PASSWORD", default="")
+
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # Turn these on behind HTTPS only: over plain http the browser drops the secure

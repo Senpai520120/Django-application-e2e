@@ -5,6 +5,8 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.files.uploadhandler import TemporaryFileUploadHandler
 from django.urls import reverse
 
+from files.pipeline import ProcessingUnavailable
+
 FILE_URLS = [
     ("files:browse", {}),
     ("files:rename", {"path": "anything"}),
@@ -343,3 +345,59 @@ def test_delete_of_missing_path_is_404(user_client):
     response = user_client.get(reverse("files:delete"), {"path": "nope.txt"})
 
     assert response.status_code == 404
+
+
+@pytest.fixture
+def triggered(settings, monkeypatch):
+    """Airflow is configured; the paths it was asked to process."""
+    settings.AIRFLOW_API_URL = "http://airflow.test"
+    seen = []
+
+    def fake_trigger(path):
+        seen.append(path)
+        return "manual__1"
+
+    monkeypatch.setattr("files.views.trigger_processing", fake_trigger)
+    return seen
+
+
+@pytest.mark.django_db
+def test_uploaded_csv_is_sent_for_processing(user_client, triggered):
+    user_client.post(reverse("files:folder_create"), {"path": "", "name": "reports"})
+    payload = SimpleUploadedFile("sales.csv", b"category\nbooks\n")
+
+    response = user_client.post(
+        reverse("files:upload"), {"path": "reports", "files": payload}, follow=True
+    )
+
+    assert triggered == ["reports/sales.csv"]
+    assert "sent for processing" in response.content.decode()
+
+
+@pytest.mark.django_db
+def test_other_uploads_are_not_sent_for_processing(user_client, triggered):
+    payload = SimpleUploadedFile("notes.txt", b"hello")
+
+    user_client.post(reverse("files:upload"), {"path": "", "files": payload})
+
+    assert triggered == []
+
+
+@pytest.mark.django_db
+def test_upload_is_kept_when_processing_does_not_start(
+    user_client, settings, monkeypatch
+):
+    settings.AIRFLOW_API_URL = "http://airflow.test"
+
+    def refuse(path):
+        raise ProcessingUnavailable("connection refused")
+
+    monkeypatch.setattr("files.views.trigger_processing", refuse)
+    payload = SimpleUploadedFile("sales.csv", b"category\nbooks\n")
+
+    response = user_client.post(
+        reverse("files:upload"), {"path": "", "files": payload}, follow=True
+    )
+
+    assert [entry.name for entry in response.context["entries"]] == ["sales.csv"]
+    assert "processing did not start" in response.content.decode()
