@@ -147,6 +147,8 @@ environment variables win over the file, so CI and docker need no `.env` at all.
 | `AWS_S3_ENDPOINT_URL` | empty | S3 emulator address for local checks |
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | empty | left unset on EC2, where the IAM role works |
 | `CSRF_TRUSTED_ORIGINS` | empty | needed behind an HTTPS proxy |
+| `AIRFLOW_API_URL` | empty | Airflow address; empty means uploads are not processed |
+| `AIRFLOW_USERNAME` / `AIRFLOW_PASSWORD` | empty | the Airflow user the app triggers runs as |
 
 The `*_SECURE` flags are off by default: over plain local HTTP the browser drops
 a secure cookie and login stops working. Turn them on before going to HTTPS and
@@ -287,6 +289,45 @@ docker compose --profile s3 up --build
 
 Every line above is covered by tests: `tests/test_files_paths.py`,
 `tests/test_files_storage.py`, `tests/test_files_views.py`.
+
+### Processing uploaded CSV files in Airflow
+
+A `.csv` file uploaded through the file manager is grouped by one of its
+columns, and the result lands in DuckDB. The upload itself stays fast: the app
+only asks Airflow to start a run and does no processing in the request.
+
+```
+Upload form -> UploadView saves the file -> files/pipeline.py
+    -> POST /api/v2/dags/process_upload/dagRuns {"conf": {"path": "..."}}
+Airflow, DAG process_upload (airflow/dags/process_upload.py):
+    locate          the file in the shared volume, the column to group by
+    group_and_save  GROUP BY that column -> table upload_groups in DuckDB
+```
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.airflow.yml up -d --build
+```
+
+* Airflow UI: http://localhost:8081 (`admin` / `admin`); the app triggers runs
+  as `django`, a user that may run DAGs but not change Airflow's settings.
+* Airflow reads the very `filestore` volume the app writes to, read-only.
+* The column is `group_by` from the run's parameters, or the file's first column
+  when it is empty. A run started by hand from the UI can set it.
+* Table `upload_groups`: `source` (the file's path), `group_column`,
+  `group_value`, `row_count`, `processed_at`. A file processed again replaces
+  its own rows, so nothing is counted twice.
+* Airflow down or not answering: the file is still saved, and the user sees a
+  warning. Without `AIRFLOW_API_URL` nothing is sent at all.
+
+Looking at the result:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.airflow.yml exec airflow   python -c "import duckdb; print(duckdb.connect('/data/analytics/analytics.duckdb', read_only=True).sql('select * from upload_groups'))"
+```
+
+Tests: `tests/test_files_pipeline.py` (the requests to Airflow),
+`tests/test_files_views.py` (which uploads are sent),
+`tests/test_upload_groups.py` (the grouping on a real DuckDB file).
 
 ## Tests
 
@@ -792,6 +833,8 @@ files/            the file manager at /files/
   storage.py        the storage contract plus local and s3
   access.py         who gets into the section
   views.py          listing, upload, rename, delete, download
+  pipeline.py       starting the Airflow processing of an uploaded CSV
+airflow/          the Airflow image and the process_upload DAG
 e2e/              pytest + Playwright: scenarios in a browser
 deploy/aws/       Terraform: S3, IAM role, EC2
 templates/        base.html, registration/login.html, the panel, 403/404/500
@@ -820,6 +863,10 @@ tests/            pytest-django
   certificate, or Caddy with Let's Encrypt in front of gunicorn), followed by
   `SESSION_COOKIE_SECURE`, `CSRF_COOKIE_SECURE`, `SECURE_SSL_REDIRECT` and HSTS,
   which CI already checks with `check --deploy`.
+* Airflow processes uploads in local storage mode only: with
+  `FILE_STORAGE_BACKEND=s3` it has no access to the files. Airflow runs in
+  `standalone` mode, one container with its own SQLite, so the run history is
+  gone when the container is recreated; the results in DuckDB stay.
 * The total size limit is counted on every upload by walking the whole storage
   (`rglob` on disk, a listing of every key in S3). That is fine for a team's
   share. With many thousands of files the total would be kept in the database
