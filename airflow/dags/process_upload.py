@@ -8,12 +8,16 @@ run's parameters.
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 from airflow.sdk import Param, dag, task
-from upload_groups import file_columns, pick_column, resolve_upload, save_groups
+from upload_groups import (
+    file_columns,
+    filestore_root,
+    pick_column,
+    resolve_upload,
+    save_groups,
+)
 
-FILESTORE_ROOT = os.environ.get("FILESTORE_ROOT", "/data/filestore")
 DUCKDB_PATH = os.environ.get("DUCKDB_PATH", "/data/analytics/analytics.duckdb")
 
 
@@ -34,15 +38,18 @@ def process_upload():
     @task
     def locate(**context) -> dict:
         params = context["params"]
-        path = resolve_upload(FILESTORE_ROOT, params["path"])
+        # Read in the task, not at import: a wrong storage setting fails this
+        # run with a clear message instead of hiding the whole DAG.
+        path = resolve_upload(filestore_root(os.environ), params["path"])
         column = pick_column(file_columns(path), params["group_by"])
-        return {"path": str(path), "column": column}
+        return {"path": path, "column": column}
 
     @task
     def group_and_save(found: dict, **context) -> int:
         return save_groups(
             DUCKDB_PATH,
-            Path(found["path"]),
+            # A string, not a Path: Path would fold the // of s3://.
+            found["path"],
             source=context["params"]["path"],
             column=found["column"],
         )

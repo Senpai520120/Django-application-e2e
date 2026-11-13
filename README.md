@@ -149,6 +149,7 @@ environment variables win over the file, so CI and docker need no `.env` at all.
 | `CSRF_TRUSTED_ORIGINS` | empty | needed behind an HTTPS proxy |
 | `AIRFLOW_API_URL` | empty | Airflow address; empty means uploads are not processed |
 | `AIRFLOW_USERNAME` / `AIRFLOW_PASSWORD` | empty | the Airflow user the app triggers runs as |
+| `AIRFLOW_AWS_ACCESS_KEY_ID` / `AIRFLOW_AWS_SECRET_ACCESS_KEY` | empty | read-only keys for Airflow in S3 mode; empty means the instance role |
 
 The `*_SECURE` flags are off by default: over plain local HTTP the browser drops
 a secure cookie and login stops working. Turn them on before going to HTTPS and
@@ -300,7 +301,7 @@ only asks Airflow to start a run and does no processing in the request.
 Upload form -> UploadView saves the file -> files/pipeline.py
     -> POST /api/v2/dags/process_upload/dagRuns {"conf": {"path": "..."}}
 Airflow, DAG process_upload (airflow/dags/process_upload.py):
-    locate          the file in the shared volume, the column to group by
+    locate          the file (shared volume or bucket), the column to group by
     group_and_save  GROUP BY that column -> table upload_groups in DuckDB
 ```
 
@@ -310,7 +311,36 @@ docker compose -f docker-compose.yml -f docker-compose.airflow.yml up -d --build
 
 * Airflow UI: http://localhost:8081 (`admin` / `admin`); the app triggers runs
   as `django`, a user that may run DAGs but not change Airflow's settings.
-* Airflow reads the very `filestore` volume the app writes to, read-only.
+* Airflow reads the files where the app keeps them. With local storage it is
+  the very `filestore` volume, mounted read-only. With `FILE_STORAGE_BACKEND=s3`
+  it is the bucket: DuckDB reads `s3://<bucket>/<FILE_MANAGER_S3_LOCATION>/...`
+  through its httpfs extension. The bucket settings are the same `AWS_*` values
+  from `.env` as the app's, the keys are not: Airflow takes
+  `AIRFLOW_AWS_ACCESS_KEY_ID` / `AIRFLOW_AWS_SECRET_ACCESS_KEY`, or the instance
+  role when they are empty, and needs read access only (the app's own keys can
+  also write and delete, so they are never passed on). A minimal policy:
+
+  ```json
+  {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": "s3:GetObject",
+        "Resource": "arn:aws:s3:::<bucket>/filemanager/*"
+      }
+    ]
+  }
+  ```
+
+  No `ListBucket`, no `PutObject` or `DeleteObject`: DuckDB reads one known
+  object. `filemanager` here is `FILE_MANAGER_S3_LOCATION`; change both
+  together. In S3 mode with localstack:
+
+  ```bash
+  docker compose -f docker-compose.yml -f docker-compose.airflow.yml --profile s3 up -d --build
+  # additionally in .env: the S3 mode values from the section above
+  ```
 * The column is `group_by` from the run's parameters, or the file's first column
   when it is empty. A run started by hand from the UI can set it.
 * Table `upload_groups`: `source` (the file's path), `group_column`,
@@ -327,7 +357,8 @@ docker compose -f docker-compose.yml -f docker-compose.airflow.yml exec airflow 
 
 Tests: `tests/test_files_pipeline.py` (the requests to Airflow),
 `tests/test_files_views.py` (which uploads are sent),
-`tests/test_upload_groups.py` (the grouping on a real DuckDB file).
+`tests/test_upload_groups.py` (the grouping on a real DuckDB file, from disk
+and from a real S3 endpoint served by moto).
 
 ## Tests
 
@@ -863,8 +894,10 @@ tests/            pytest-django
   certificate, or Caddy with Let's Encrypt in front of gunicorn), followed by
   `SESSION_COOKIE_SECURE`, `CSRF_COOKIE_SECURE`, `SECURE_SSL_REDIRECT` and HSTS,
   which CI already checks with `check --deploy`.
-* Airflow processes uploads in local storage mode only: with
-  `FILE_STORAGE_BACKEND=s3` it has no access to the files. Airflow runs in
+* Reading uploads from S3 is checked against localstack and moto, not against
+  a real AWS bucket, and the keyless instance-role path is not run in any
+  test. Localstack and moto do not enforce IAM, so the read-only policy for
+  Airflow is not exercised by any check. Airflow runs in
   `standalone` mode, one container with its own SQLite, so the run history is
   gone when the container is recreated; the results in DuckDB stay.
 * The total size limit is counted on every upload by walking the whole storage

@@ -9,6 +9,7 @@ USER root
 RUN mkdir -p /data/analytics && chown airflow:root /data/analytics
 USER airflow
 
-# read_xlsx lives in DuckDB's excel extension: fetched now, at build time, so
-# a run never has to download it.
-RUN python -c "import duckdb; duckdb.sql('INSTALL excel')"
+# DuckDB extensions are fetched now, at build time, so a run never has to
+# download one: excel for read_xlsx, httpfs for s3:// files, aws for reading
+# them with an instance role instead of keys.
+RUN python -c "import duckdb; [duckdb.sql(f'INSTALL {e}') for e in ('excel', 'httpfs', 'aws')]"

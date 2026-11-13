@@ -1,12 +1,18 @@
 """The DAG's grouping, run against a real DuckDB file."""
 
+import os
+
+import boto3
 import duckdb
 import pytest
+from moto.server import ThreadedMotoServer
 from upload_groups import (
     UploadError,
     file_columns,
+    filestore_root,
     pick_column,
     resolve_upload,
+    s3_secret,
     save_groups,
 )
 
@@ -106,3 +112,89 @@ def test_other_files_are_refused(tmp_path):
 def test_path_must_point_to_a_file_inside_the_store(store, path):
     with pytest.raises(UploadError):
         resolve_upload(store, path)
+
+
+S3_ENV = {
+    "FILE_STORAGE_BACKEND": "s3",
+    "AWS_STORAGE_BUCKET_NAME": "uploads",
+    "FILE_MANAGER_S3_LOCATION": "filemanager",
+    "AWS_S3_REGION_NAME": "us-east-1",
+    "AWS_S3_ADDRESSING_STYLE": "path",
+    "AWS_ACCESS_KEY_ID": "test",
+    "AWS_SECRET_ACCESS_KEY": "test",
+}
+
+
+@pytest.fixture
+def bucket(monkeypatch):
+    """A real S3 endpoint (moto's server) with sales.csv where the app puts it."""
+    server = ThreadedMotoServer(ip_address="127.0.0.1", port=0, verbose=False)
+    server.start()
+    host, port = server.get_host_and_port()
+    endpoint = f"http://{host}:{port}"
+    for name, value in {**S3_ENV, "AWS_S3_ENDPOINT_URL": endpoint}.items():
+        monkeypatch.setenv(name, value)
+    s3 = boto3.client(
+        "s3",
+        endpoint_url=endpoint,
+        region_name="us-east-1",
+        aws_access_key_id="test",
+        aws_secret_access_key="test",
+    )
+    s3.create_bucket(Bucket="uploads")
+    s3.put_object(
+        Bucket="uploads", Key="filemanager/reports/sales.csv", Body=SALES.encode()
+    )
+    yield
+    server.stop()
+
+
+def test_file_in_s3_is_grouped(bucket, tmp_path):
+    path = resolve_upload(filestore_root(os.environ), "reports/sales.csv")
+    db = tmp_path / "a.duckdb"
+
+    assert path == "s3://uploads/filemanager/reports/sales.csv"
+    assert file_columns(path) == ["category", "amount"]
+    assert save_groups(db, path, "reports/sales.csv", "category") == 2
+    assert rows(db) == [
+        ("reports/sales.csv", "category", "books", 2),
+        ("reports/sales.csv", "category", "toys", 1),
+    ]
+
+
+def test_missing_object_in_s3_fails_the_read(bucket):
+    path = resolve_upload(filestore_root(os.environ), "reports/gone.csv")
+
+    with pytest.raises(duckdb.Error):
+        file_columns(path)
+
+
+@pytest.mark.parametrize("path", ["../other/secret.csv", "/etc/passwd", ""])
+def test_s3_path_must_stay_under_the_prefix(path):
+    with pytest.raises(UploadError):
+        resolve_upload("s3://uploads/filemanager", path)
+
+
+def test_root_follows_the_app_storage_setting():
+    assert filestore_root({"FILESTORE_ROOT": "/data/filestore"}) == "/data/filestore"
+    assert filestore_root(S3_ENV) == "s3://uploads/filemanager"
+    assert filestore_root({**S3_ENV, "FILE_MANAGER_S3_LOCATION": ""}) == "s3://uploads"
+    with pytest.raises(UploadError):
+        filestore_root({"FILE_STORAGE_BACKEND": "s3"})
+
+
+def test_s3_secret_matches_the_app_settings():
+    assert s3_secret({"FILE_STORAGE_BACKEND": "local"}) is None
+
+    emulator = s3_secret({**S3_ENV, "AWS_S3_ENDPOINT_URL": "http://localstack:4566"})
+    assert "KEY_ID 'test'" in emulator
+    assert "ENDPOINT 'localstack:4566'" in emulator
+    assert "USE_SSL false" in emulator
+    assert "URL_STYLE 'path'" in emulator
+
+    # No keys in the environment: an instance role, as on the EC2 deploy.
+    keyless = {"FILE_STORAGE_BACKEND": "s3", "AWS_STORAGE_BUCKET_NAME": "uploads"}
+    secret = s3_secret(keyless)
+    assert "PROVIDER credential_chain" in secret
+    assert "KEY_ID" not in secret
+    assert "ENDPOINT" not in secret
