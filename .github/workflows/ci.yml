@@ -303,6 +303,52 @@ jobs:
         if: always()
         run: docker compose -f docker-compose.yml -f docker-compose.sso.yml -f docker-compose.ad.yml down -v --remove-orphans
 
+  airflow-dags:
+    name: Airflow DAGs import cleanly
+    runs-on: ubuntu-latest
+    needs: [lint, django-checks, test]
+    steps:
+      - uses: actions/checkout@v7
+
+      # Passwords are generated per run, never real ones.
+      - name: Prepare .env
+        run: |
+          cp .env.example .env
+          KEY=$(python -c "import secrets; print(secrets.token_urlsafe(64))")
+          sed -i "s|^SECRET_KEY=.*|SECRET_KEY=$KEY|" .env
+          {
+            echo "AIRFLOW_ADMIN_PASSWORD=$(python -c 'import secrets; print(secrets.token_urlsafe(24))')"
+            echo "AIRFLOW_PASSWORD=$(python -c 'import secrets; print(secrets.token_urlsafe(24))')"
+          } >> .env
+
+      - name: Start Airflow
+        run: >
+          docker compose -f docker-compose.yml -f docker-compose.airflow.yml
+          up -d --build --wait airflow
+
+      - name: DAG files have no import errors
+        run: |
+          compose="docker compose -f docker-compose.yml -f docker-compose.airflow.yml"
+          $compose exec -T airflow airflow dags reserialize
+          errors=$($compose exec -T airflow airflow dags list-import-errors -o json)
+          echo "$errors"
+          # The output may start with log lines; the JSON begins at the first [.
+          python - "$errors" <<'PY'
+          import json, sys
+          text = sys.argv[1]
+          found = json.loads(text[text.index("["):])
+          assert found == [], found
+          PY
+          $compose exec -T airflow airflow dags list -o json | grep -q process_upload
+
+      - name: Container logs
+        if: failure()
+        run: docker compose -f docker-compose.yml -f docker-compose.airflow.yml logs airflow
+
+      - name: Shut the stack down
+        if: always()
+        run: docker compose -f docker-compose.yml -f docker-compose.airflow.yml down -v --remove-orphans
+
   publish:
     name: Publish the image to GHCR
     runs-on: ubuntu-latest

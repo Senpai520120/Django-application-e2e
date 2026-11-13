@@ -1,9 +1,14 @@
 """File manager views: access, limits, and path safety."""
 
 import pytest
+import requests
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.files.uploadhandler import TemporaryFileUploadHandler
 from django.urls import reverse
+
+from files import pipeline
+from files.pipeline import ProcessingUnavailable
+from tests.test_files_pipeline import FakeResponse
 
 FILE_URLS = [
     ("files:browse", {}),
@@ -343,3 +348,126 @@ def test_delete_of_missing_path_is_404(user_client):
     response = user_client.get(reverse("files:delete"), {"path": "nope.txt"})
 
     assert response.status_code == 404
+
+
+@pytest.fixture
+def triggered(settings, monkeypatch):
+    """Airflow is configured; the paths it was asked to process."""
+    settings.AIRFLOW_API_URL = "http://airflow.test"
+    seen = []
+
+    def fake_trigger(path, token):
+        seen.append(path)
+        return "manual__1"
+
+    monkeypatch.setattr("files.views.access_token", lambda: "jwt")
+    monkeypatch.setattr("files.views.trigger_processing", fake_trigger)
+    return seen
+
+
+@pytest.mark.django_db
+def test_uploaded_csv_is_sent_for_processing(user_client, triggered):
+    user_client.post(reverse("files:folder_create"), {"path": "", "name": "reports"})
+    payload = SimpleUploadedFile("sales.csv", b"category\nbooks\n")
+
+    response = user_client.post(
+        reverse("files:upload"), {"path": "reports", "files": payload}, follow=True
+    )
+
+    assert triggered == ["reports/sales.csv"]
+    assert "sent for processing" in response.content.decode()
+
+
+@pytest.mark.django_db
+def test_other_uploads_are_not_sent_for_processing(user_client, triggered):
+    payload = SimpleUploadedFile("notes.txt", b"hello")
+
+    user_client.post(reverse("files:upload"), {"path": "", "files": payload})
+
+    assert triggered == []
+
+
+@pytest.mark.django_db
+def test_upload_is_kept_when_processing_does_not_start(
+    user_client, settings, monkeypatch
+):
+    settings.AIRFLOW_API_URL = "http://airflow.test"
+
+    def refuse():
+        raise ProcessingUnavailable("connection refused")
+
+    monkeypatch.setattr("files.views.access_token", refuse)
+    payload = SimpleUploadedFile("sales.csv", b"category\nbooks\n")
+
+    response = user_client.post(
+        reverse("files:upload"), {"path": "", "files": payload}, follow=True
+    )
+
+    assert [entry.name for entry in response.context["entries"]] == ["sales.csv"]
+    assert "processing did not start" in response.content.decode()
+
+
+@pytest.mark.django_db
+def test_airflow_down_is_tried_once_for_a_whole_upload(
+    user_client, settings, monkeypatch
+):
+    settings.AIRFLOW_API_URL = "http://airflow.test"
+    attempts = []
+
+    def refuse(url, **kwargs):
+        attempts.append(url)
+        raise requests.ConnectionError("connection refused")
+
+    monkeypatch.setattr(pipeline.requests, "post", refuse)
+    names = [f"part{number}.csv" for number in range(7)]
+    payload = [SimpleUploadedFile(name, b"x") for name in names]
+
+    response = user_client.post(
+        reverse("files:upload"), {"path": "", "files": payload}, follow=True
+    )
+
+    assert len(attempts) == 1
+    assert sorted(entry.name for entry in response.context["entries"]) == names
+    warnings = [m for m in response.context["messages"] if m.level_tag == "warning"]
+    assert len(warnings) == 1
+
+
+@pytest.mark.django_db
+def test_one_token_is_used_for_all_files_of_an_upload(
+    user_client, settings, monkeypatch
+):
+    settings.AIRFLOW_API_URL = "http://airflow.test"
+    urls = []
+
+    def fake_post(url, **kwargs):
+        urls.append(url)
+        if url.endswith("/auth/token"):
+            return FakeResponse({"access_token": "jwt"}, status=201)
+        return FakeResponse({"dag_run_id": "manual__1"})
+
+    monkeypatch.setattr(pipeline.requests, "post", fake_post)
+    payload = [SimpleUploadedFile(name, b"x") for name in ("a.csv", "b.csv", "c.csv")]
+
+    user_client.post(reverse("files:upload"), {"path": "", "files": payload})
+
+    assert sum(url.endswith("/auth/token") for url in urls) == 1
+    assert sum(url.endswith("/dagRuns") for url in urls) == 3
+
+
+@pytest.mark.django_db
+def test_table_file_rules_are_shown_when_processing_is_on(user_client, settings):
+    settings.AIRFLOW_API_URL = "http://airflow.test"
+
+    page = user_client.get(reverse("files:browse")).content.decode()
+
+    assert 'data-testid="table-rules"' in page
+    assert "<code>.xlsx</code>" in page
+
+
+@pytest.mark.django_db
+def test_table_file_rules_are_hidden_without_processing(user_client, settings):
+    settings.AIRFLOW_API_URL = ""
+
+    page = user_client.get(reverse("files:browse")).content.decode()
+
+    assert 'data-testid="table-rules"' not in page

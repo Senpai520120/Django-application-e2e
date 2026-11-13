@@ -45,6 +45,32 @@
     Storage: <code>{{ backend }}</code>. Maximum file size: {{ max_file_size }}.
   </p>
 
+  {% if table_formats %}
+    <details class="hint" data-testid="table-rules">
+      <summary>
+        Table files ({% for ext in table_formats %}<code>{{ ext }}</code>{% if not forloop.last %}, {% endif %}{% endfor %})
+        are grouped by a column after upload. How to prepare one
+      </summary>
+      <ul>
+        <li>The first row holds the column names: short, in Latin letters, no spaces
+          (<code>category</code>, not <code>Product category</code>).</li>
+        <li>Rows are grouped by the first column, so put there a value that repeats:
+          a category, a city, a status.</li>
+        <li>Every row has as many values as there are columns.</li>
+        <li>CSV: comma between values, UTF-8 encoding, a value with a comma inside
+          goes in quotes (<code>"Lego, big set"</code>), decimals with a dot (<code>12.5</code>).
+          In Excel choose <em>Save as → CSV UTF-8</em>.</li>
+        <li>Excel (<code>.xlsx</code>): only the first sheet is read, the table starts in cell A1.</li>
+        <li>JSON: a list of records, <code>[{"category": "books", "amount": 12}, …]</code>.</li>
+        <li>Other files are stored as they are, without processing.</li>
+      </ul>
+      <pre>category,product,amount
+books,Dune,12
+toys,Lego,40
+books,Solaris,9</pre>
+    </details>
+  {% endif %}
+
   <div class="table-wrap">
     <table data-testid="entries">
       <thead>

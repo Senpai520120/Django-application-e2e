@@ -6,6 +6,8 @@ goes through `files.storage.get_storage()`. A malformed path turns into
 is nothing to catch here.
 """
 
+import logging
+
 from django.conf import settings
 from django.contrib import messages
 from django.http import FileResponse, Http404
@@ -21,8 +23,18 @@ from django.views.generic import FormView, TemplateView
 from files.access import FileManagerAccessMixin
 from files.forms import FolderForm, RenameForm, UploadForm
 from files.paths import breadcrumbs, join_path, normalize_path, parent_path
+from files.pipeline import (
+    TABLE_FORMATS,
+    ProcessingUnavailable,
+    access_token,
+    processing_enabled,
+    should_process,
+    trigger_processing,
+)
 from files.storage import StorageError, get_storage
 from files.uploads import oversized_uploads
+
+logger = logging.getLogger(__name__)
 
 
 def browse_url(path: str = "") -> str:
@@ -67,6 +79,7 @@ class BrowseView(FileManagerMixin, TemplateView):
             upload_form=UploadForm(initial={"path": self.path}),
             backend=self.storage.__class__.__name__,
             max_file_size=filesizeformat(settings.FILE_MANAGER["MAX_FILE_SIZE"]),
+            table_formats=TABLE_FORMATS if processing_enabled() else (),
         )
         return context
 
@@ -119,11 +132,14 @@ class UploadView(FileManagerMixin, FormView):
             )
             return self.redirect_to(path)
 
+        # One token per upload; after the first failure Airflow is not tried again.
+        self.token = None
+        self.processing_down = False
         saved = 0
         for item in uploaded:
             name = item.name.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
             try:
-                self.storage.save(join_path(path, name), item)
+                stored = self.storage.save(join_path(path, name), item)
             except StorageError as error:
                 messages.error(
                     self.request,
@@ -131,12 +147,33 @@ class UploadView(FileManagerMixin, FormView):
                 )
             else:
                 saved += 1
+                if should_process(name) and not self.processing_down:
+                    self.send_to_processing(name, stored)
 
+        if self.processing_down:
+            messages.warning(
+                self.request,
+                _("Airflow is unavailable: files are saved, processing did not start."),
+            )
         if saved:
             messages.success(
                 self.request, _("Uploaded files: %(count)s.") % {"count": saved}
             )
         return self.redirect_to(path)
+
+    def send_to_processing(self, name, stored):
+        # The file is saved by now: a processing failure must not undo that.
+        try:
+            if self.token is None:
+                self.token = access_token()
+            trigger_processing(stored, self.token)
+        except ProcessingUnavailable:
+            logger.warning("Processing of %s was not started", stored, exc_info=True)
+            self.processing_down = True
+        else:
+            messages.info(
+                self.request, _("%(name)s is sent for processing.") % {"name": name}
+            )
 
     def form_invalid(self, form):
         for error in form.errors.values():

@@ -26,6 +26,8 @@ known-first-party = ["accounts", "config", "files", "panel"]
 DJANGO_SETTINGS_MODULE = "config.settings_test"
 python_files = ["test_*.py"]
 testpaths = ["tests"]
+# The DAG helpers are imported the way Airflow imports them: from its dags folder.
+pythonpath = ["airflow/dags"]
 addopts = "-q"
 # whitenoise grumbles about a missing STATIC_ROOT; tests need no collectstatic.
 filterwarnings = ["ignore:No directory at:UserWarning"]

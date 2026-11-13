@@ -40,6 +40,25 @@ updates:
       docker-images:
         patterns: ["*"]
 
+  # The Airflow image, with DuckDB added for the upload processing.
+  - package-ecosystem: docker
+    directory: "/airflow"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      airflow-image:
+        patterns: ["*"]
+
+  - package-ecosystem: pip
+    directory: "/airflow"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      airflow-deps:
+        patterns: ["*"]
+
   # Images from docker-compose.yml (postgres, localstack) are a separate
   # ecosystem; ecosystem: docker does not see them.
   - package-ecosystem: docker-compose
