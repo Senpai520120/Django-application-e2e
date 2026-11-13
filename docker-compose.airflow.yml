@@ -57,9 +57,6 @@ services:
       AIRFLOW_API_URL: http://airflow:8080
       AIRFLOW_USERNAME: django
       AIRFLOW_PASSWORD: django
-    depends_on:
-      airflow:
-        condition: service_healthy
 
 volumes:
   analytics:
