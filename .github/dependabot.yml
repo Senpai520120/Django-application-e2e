@@ -39,6 +39,13 @@ updates:
     groups:
       docker-images:
         patterns: ["*"]
+    # The task sets Python 3.12 and CI tests 3.12 and 3.13: a newer Python in
+    # the image would run untested, so only patch updates are proposed.
+    ignore:
+      - dependency-name: python
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
 
   # The Airflow image, with DuckDB added for the upload processing.
   - package-ecosystem: docker
