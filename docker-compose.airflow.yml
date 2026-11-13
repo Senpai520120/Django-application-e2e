@@ -1,6 +1,6 @@
 # Processing of uploaded CSV files in Airflow. Laid over the main file:
 #   docker compose -f docker-compose.yml -f docker-compose.airflow.yml up -d --build
-# Airflow UI: http://localhost:8081 (admin / admin).
+# Airflow UI: http://localhost:8081 (admin, password from AIRFLOW_ADMIN_PASSWORD in .env).
 # Results: the upload_groups table in the DuckDB file on the analytics volume.
 # Works with either storage: FILE_STORAGE_BACKEND and the bucket settings come
 # from .env, the same ones the app uses, so in s3 mode Airflow reads the bucket
@@ -12,14 +12,30 @@ services:
     build: ./airflow
     # Scheduler, API server and DAG processor in one container: enough for
     # one machine, not for production.
-    command: standalone
+    # The passwords file is written here from .env on every start, so no
+    # passwords live in git. $$ stops compose from substituting; the shell
+    # inside the container expands them.
+    command:
+      - bash
+      - -c
+      - |
+        if [ -z "$$AIRFLOW_ADMIN_PASSWORD" ] || [ -z "$$AIRFLOW_PASSWORD" ]; then
+          echo "ERROR: set AIRFLOW_ADMIN_PASSWORD and AIRFLOW_PASSWORD in .env" >&2
+          exit 1
+        fi
+        python -c 'import json, os; json.dump({"admin": os.environ["AIRFLOW_ADMIN_PASSWORD"], os.environ["AIRFLOW_USERNAME"]: os.environ["AIRFLOW_PASSWORD"]}, open("/opt/airflow/passwords.json", "w"))'
+        exec /entrypoint standalone
     environment:
       AIRFLOW__CORE__LOAD_EXAMPLES: "False"
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "False"
       # The app triggers runs as "django", which may run DAGs but not change
       # Airflow's settings; people sign in to the UI as "admin".
-      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: admin:admin,django:user
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: admin:admin,${AIRFLOW_USERNAME:-django}:user
       AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE: /opt/airflow/passwords.json
+      # Passwords come from .env; the file is generated, see command above.
+      AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-}
+      AIRFLOW_USERNAME: ${AIRFLOW_USERNAME:-django}
+      AIRFLOW_PASSWORD: ${AIRFLOW_PASSWORD:-}
       FILESTORE_ROOT: /data/filestore
       DUCKDB_PATH: /data/analytics/analytics.duckdb
       # Only the storage settings from .env, not all of it: Airflow has no
@@ -36,8 +52,6 @@ services:
       AWS_SECRET_ACCESS_KEY: ${AIRFLOW_AWS_SECRET_ACCESS_KEY:-}
     volumes:
       - ./airflow/dags:/opt/airflow/dags:ro
-      # Dev-only passwords, the same as AIRFLOW_PASSWORD below.
-      - ./airflow/passwords.json:/opt/airflow/passwords.json
       # The very volume the app saves uploads to; Airflow only reads it.
       - filestore:/data/filestore:ro
       - analytics:/data/analytics
@@ -55,8 +69,8 @@ services:
   web:
     environment:
       AIRFLOW_API_URL: http://airflow:8080
-      AIRFLOW_USERNAME: django
-      AIRFLOW_PASSWORD: django
+      AIRFLOW_USERNAME: ${AIRFLOW_USERNAME:-django}
+      AIRFLOW_PASSWORD: ${AIRFLOW_PASSWORD:-}
 
 volumes:
   analytics:

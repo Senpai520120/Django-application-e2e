@@ -34,3 +34,6 @@ test-results/
 # Playwright storage state (codegen --save-storage): session cookies
 auth.json
 .playwright-mcp/
+
+# Airflow passwords file (generated, never commit)
+airflow/passwords.json
