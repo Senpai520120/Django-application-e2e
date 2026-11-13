@@ -1,7 +1,8 @@
-"""Group a CSV uploaded through the file manager and save it into DuckDB.
+"""Group a table file uploaded through the file manager and save it into DuckDB.
 
 No schedule: the app triggers a run through the REST API right after a
-.csv file is saved, with the file's path in the run's parameters.
+.csv, .xlsx, .json or .parquet file is saved, with the file's path in the
+run's parameters.
 """
 
 from __future__ import annotations
@@ -10,7 +11,7 @@ import os
 from pathlib import Path
 
 from airflow.sdk import Param, dag, task
-from upload_groups import csv_columns, pick_column, resolve_upload, save_groups
+from upload_groups import file_columns, pick_column, resolve_upload, save_groups
 
 FILESTORE_ROOT = os.environ.get("FILESTORE_ROOT", "/data/filestore")
 DUCKDB_PATH = os.environ.get("DUCKDB_PATH", "/data/analytics/analytics.duckdb")
@@ -33,15 +34,15 @@ def process_upload():
     @task
     def locate(**context) -> dict:
         params = context["params"]
-        csv_path = resolve_upload(FILESTORE_ROOT, params["path"])
-        column = pick_column(csv_columns(csv_path), params["group_by"])
-        return {"csv_path": str(csv_path), "column": column}
+        path = resolve_upload(FILESTORE_ROOT, params["path"])
+        column = pick_column(file_columns(path), params["group_by"])
+        return {"path": str(path), "column": column}
 
     @task
     def group_and_save(found: dict, **context) -> int:
         return save_groups(
             DUCKDB_PATH,
-            Path(found["csv_path"]),
+            Path(found["path"]),
             source=context["params"]["path"],
             column=found["column"],
         )

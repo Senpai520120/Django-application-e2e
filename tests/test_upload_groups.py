@@ -4,7 +4,7 @@ import duckdb
 import pytest
 from upload_groups import (
     UploadError,
-    csv_columns,
+    file_columns,
     pick_column,
     resolve_upload,
     save_groups,
@@ -30,12 +30,12 @@ def rows(db_path):
 
 
 def test_groups_by_the_first_column(store, tmp_path):
-    csv_path = resolve_upload(store, "reports/sales.csv")
-    column = pick_column(csv_columns(csv_path), None)
+    path = resolve_upload(store, "reports/sales.csv")
+    column = pick_column(file_columns(path), None)
 
     db = tmp_path / "a.duckdb"
 
-    assert save_groups(db, csv_path, "reports/sales.csv", column) == 2
+    assert save_groups(db, path, "reports/sales.csv", column) == 2
     assert rows(db) == [
         ("reports/sales.csv", "category", "books", 2),
         ("reports/sales.csv", "category", "toys", 1),
@@ -44,20 +44,62 @@ def test_groups_by_the_first_column(store, tmp_path):
 
 def test_same_file_again_replaces_its_groups(store, tmp_path):
     db = tmp_path / "a.duckdb"
-    csv_path = resolve_upload(store, "reports/sales.csv")
+    path = resolve_upload(store, "reports/sales.csv")
 
-    save_groups(db, csv_path, "reports/sales.csv", "category")
-    save_groups(db, csv_path, "reports/sales.csv", "category")
+    save_groups(db, path, "reports/sales.csv", "category")
+    save_groups(db, path, "reports/sales.csv", "category")
 
     assert len(rows(db)) == 2
 
 
 def test_requested_column_must_exist(store):
-    columns = csv_columns(resolve_upload(store, "reports/sales.csv"))
+    columns = file_columns(resolve_upload(store, "reports/sales.csv"))
 
     assert pick_column(columns, "amount") == "amount"
     with pytest.raises(UploadError):
         pick_column(columns, "price")
+
+
+@pytest.fixture(scope="module")
+def table_files(tmp_path_factory):
+    """The same sales table saved in every format the DAG reads."""
+    folder = tmp_path_factory.mktemp("tables")
+    with duckdb.connect() as con:
+        # Writing .xlsx needs the excel extension loaded; reading loads it alone.
+        con.execute("INSTALL excel")
+        con.execute("LOAD excel")
+        con.execute(
+            "CREATE TABLE sales AS SELECT * FROM (VALUES"
+            " ('books', 10), ('toys', 5), ('books', 7)) t(category, amount)"
+        )
+        for ext, options in [
+            ("csv", "FORMAT csv, HEADER true"),
+            ("json", "FORMAT json, ARRAY true"),
+            ("parquet", "FORMAT parquet"),
+            ("xlsx", "FORMAT xlsx, HEADER true"),
+        ]:
+            con.execute(f"COPY sales TO '{folder / ('sales.' + ext)}' ({options})")
+    return folder
+
+
+@pytest.mark.parametrize(
+    "name", ["sales.csv", "sales.json", "sales.parquet", "sales.xlsx"]
+)
+def test_every_table_format_is_grouped(table_files, tmp_path, name):
+    path = resolve_upload(table_files, name)
+    db = tmp_path / "a.duckdb"
+
+    assert file_columns(path) == ["category", "amount"]
+    assert save_groups(db, path, name, "category") == 2
+    assert rows(db) == [(name, "category", "books", 2), (name, "category", "toys", 1)]
+
+
+def test_other_files_are_refused(tmp_path):
+    notes = tmp_path / "notes.txt"
+    notes.write_text("hello")
+
+    with pytest.raises(UploadError):
+        file_columns(notes)
 
 
 @pytest.mark.parametrize("path", ["../secret.csv", "/etc/passwd", "", "missing.csv"])

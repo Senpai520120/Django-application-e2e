@@ -401,3 +401,22 @@ def test_upload_is_kept_when_processing_does_not_start(
 
     assert [entry.name for entry in response.context["entries"]] == ["sales.csv"]
     assert "processing did not start" in response.content.decode()
+
+
+@pytest.mark.django_db
+def test_table_file_rules_are_shown_when_processing_is_on(user_client, settings):
+    settings.AIRFLOW_API_URL = "http://airflow.test"
+
+    page = user_client.get(reverse("files:browse")).content.decode()
+
+    assert 'data-testid="table-rules"' in page
+    assert "<code>.xlsx</code>" in page
+
+
+@pytest.mark.django_db
+def test_table_file_rules_are_hidden_without_processing(user_client, settings):
+    settings.AIRFLOW_API_URL = ""
+
+    page = user_client.get(reverse("files:browse")).content.decode()
+
+    assert 'data-testid="table-rules"' not in page

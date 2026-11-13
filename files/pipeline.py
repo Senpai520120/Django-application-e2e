@@ -1,4 +1,4 @@
-"""Sending uploaded CSV files to Airflow for processing.
+"""Sending uploaded table files to Airflow for processing.
 
 The app only asks Airflow to start the process_upload DAG for a file; the
 reading and grouping happen there (airflow/dags/process_upload.py), so an
@@ -12,6 +12,10 @@ TIMEOUT = 5
 
 DAG_ID = "process_upload"
 
+# Formats the DAG can read; keep in step with READERS in
+# airflow/dags/upload_groups.py. Other files are only stored.
+TABLE_FORMATS = (".csv", ".xlsx", ".json", ".parquet")
+
 
 class ProcessingUnavailable(Exception):
     """Airflow did not answer, or refused to start the run."""
@@ -22,7 +26,7 @@ def processing_enabled() -> bool:
 
 
 def should_process(name: str) -> bool:
-    return processing_enabled() and name.lower().endswith(".csv")
+    return processing_enabled() and name.lower().endswith(TABLE_FORMATS)
 
 
 def access_token() -> str:

@@ -8,3 +8,7 @@ RUN pip install --no-cache-dir -r /requirements.txt
 USER root
 RUN mkdir -p /data/analytics && chown airflow:root /data/analytics
 USER airflow
+
+# read_xlsx lives in DuckDB's excel extension: fetched now, at build time, so
+# a run never has to download it.
+RUN python -c "import duckdb; duckdb.sql('INSTALL excel')"

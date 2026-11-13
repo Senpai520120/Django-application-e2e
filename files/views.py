@@ -23,7 +23,13 @@ from django.views.generic import FormView, TemplateView
 from files.access import FileManagerAccessMixin
 from files.forms import FolderForm, RenameForm, UploadForm
 from files.paths import breadcrumbs, join_path, normalize_path, parent_path
-from files.pipeline import ProcessingUnavailable, should_process, trigger_processing
+from files.pipeline import (
+    TABLE_FORMATS,
+    ProcessingUnavailable,
+    processing_enabled,
+    should_process,
+    trigger_processing,
+)
 from files.storage import StorageError, get_storage
 from files.uploads import oversized_uploads
 
@@ -72,6 +78,7 @@ class BrowseView(FileManagerMixin, TemplateView):
             upload_form=UploadForm(initial={"path": self.path}),
             backend=self.storage.__class__.__name__,
             max_file_size=filesizeformat(settings.FILE_MANAGER["MAX_FILE_SIZE"]),
+            table_formats=TABLE_FORMATS if processing_enabled() else (),
         )
         return context
 

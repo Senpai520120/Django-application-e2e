@@ -76,9 +76,18 @@ def test_airflow_down_becomes_processing_unavailable(airflow, monkeypatch):
 
 @pytest.mark.parametrize(
     ("name", "expected"),
-    [("sales.csv", True), ("SALES.CSV", True), ("notes.txt", False), ("csv", False)],
+    [
+        ("sales.csv", True),
+        ("SALES.CSV", True),
+        ("sales.xlsx", True),
+        ("sales.json", True),
+        ("sales.parquet", True),
+        ("sales.xls", False),
+        ("notes.txt", False),
+        ("csv", False),
+    ],
 )
-def test_only_csv_files_are_processed(airflow, name, expected):
+def test_only_table_files_are_processed(airflow, name, expected):
     assert pipeline.should_process(name) is expected
 
 
