@@ -7,7 +7,8 @@ keeps only a hash of the password; Keycloak accepts that hash as it is
 to Keycloak with the very same password.
 
 The app calls the Admin API as the service account of its own client, which
-the realm gives only the view-users and manage-users roles.
+the realm gives only the view-users and manage-users roles, asking for the
+kc-admin-api scope that the Admin API requires.
 """
 
 import base64
@@ -184,6 +185,10 @@ def service_token():
             "grant_type": "client_credentials",
             "client_id": settings.OIDC_RP_CLIENT_ID,
             "client_secret": settings.OIDC_RP_CLIENT_SECRET,
+            # Since Keycloak 26.8.2 the Admin API takes only tokens of this
+            # scope. It is optional on the client, so sign-in tokens stay
+            # without the Admin API audience.
+            "scope": "kc-admin-api",
         },
         timeout=TIMEOUT,
     )

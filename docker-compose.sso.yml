@@ -5,7 +5,9 @@
 
 services:
   keycloak:
-    image: quay.io/keycloak/keycloak:26.8
+    # An exact patch: 26.8.2 broke Admin API access in a patch release
+    # (realm-myapp.json: kc-admin-api). Dependabot proposes newer ones.
+    image: quay.io/keycloak/keycloak:26.8.2
     command: start-dev --import-realm
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
