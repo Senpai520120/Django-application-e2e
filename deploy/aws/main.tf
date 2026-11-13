@@ -19,6 +19,7 @@ provider "aws" {
 
 locals {
   name = "users-and-roles"
+  full = var.stack == "full"
   tags = {
     Project   = local.name
     ManagedBy = "terraform"
@@ -27,6 +28,19 @@ locals {
 
 resource "random_password" "secret_key" {
   length  = 64
+  special = false
+}
+
+# Airflow logins, only for the full stack.
+resource "random_password" "airflow_admin" {
+  count   = local.full ? 1 : 0
+  length  = 24
+  special = false
+}
+
+resource "random_password" "airflow_user" {
+  count   = local.full ? 1 : 0
+  length  = 24
   special = false
 }
 
@@ -110,17 +124,27 @@ resource "aws_iam_instance_profile" "app" {
 # ---------------------------------------------------------------------------
 
 # AWS accepts a security group description in ASCII only.
+# stack=app: HTTP for everyone. stack=full: the dev passwords of Keycloak and
+# the demo accounts are in play, so every port is limited to admin_cidr.
 resource "aws_security_group" "app" {
   name        = "${local.name}-app"
-  description = "HTTP for everyone, SSH only from the configured address"
+  description = local.full ? "Full stack: all ports only from admin_cidr" : "HTTP for everyone, SSH only from the configured address"
   tags        = local.tags
 
-  ingress {
-    description = "HTTP"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+  dynamic "ingress" {
+    for_each = local.full ? {
+      "Application" = 80
+      "Keycloak"    = 8080
+      "Airflow UI"  = 8081
+    } : { "HTTP" = 80 }
+
+    content {
+      description = ingress.key
+      from_port   = ingress.value
+      to_port     = ingress.value
+      protocol    = "tcp"
+      cidr_blocks = local.full ? [var.admin_cidr] : ["0.0.0.0/0"]
+    }
   }
 
   dynamic "ingress" {
@@ -162,6 +186,26 @@ resource "aws_instance" "app" {
 
   metadata_options {
     http_tokens = "required" # IMDSv2
+    # Containers sit one hop behind the host; the full stack runs the app and
+    # Airflow in containers that read the instance role. null keeps the default.
+    http_put_response_hop_limit = local.full ? 2 : null
+  }
+
+  # Image builds (airflow, samba, web) need more than the default disk.
+  dynamic "root_block_device" {
+    for_each = local.full ? [1] : []
+
+    content {
+      volume_size = 30
+      volume_type = "gp3"
+    }
+  }
+
+  lifecycle {
+    precondition {
+      condition     = !local.full || var.admin_cidr != ""
+      error_message = "stack=full needs admin_cidr (your address, for example 203.0.113.7/32): all its ports are open only to it."
+    }
   }
 
   # Changing the image changes user_data, and cloud-init only runs on the
@@ -169,7 +213,15 @@ resource "aws_instance" "app" {
   # container.
   user_data_replace_on_change = true
 
-  user_data = templatefile("${path.module}/user_data.sh.tftpl", {
+  user_data = local.full ? templatefile("${path.module}/user_data_full.sh.tftpl", {
+    git_ref                = var.git_ref
+    repo_url               = var.repo_url
+    bucket                 = aws_s3_bucket.files.bucket
+    region                 = var.region
+    secret_key             = random_password.secret_key.result
+    airflow_password       = one(random_password.airflow_user[*].result)
+    airflow_admin_password = one(random_password.airflow_admin[*].result)
+    }) : templatefile("${path.module}/user_data.sh.tftpl", {
     image           = var.image
     bucket          = aws_s3_bucket.files.bucket
     region          = var.region

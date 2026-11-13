@@ -828,6 +828,61 @@ the bucket immediately. To check: upload a file in `/files/` and look at
 If you deploy without Terraform, the least-privilege IAM policy is in
 `deploy/aws/iam-policy.json` — put your bucket name into it.
 
+### Full stack on AWS (Airflow, Keycloak, Samba AD)
+
+`stack=full` builds the whole local setup on one instance from this repository:
+the app, S3, Airflow with DuckDB, Keycloak SSO and Samba AD. The default
+`stack=app` is the deployment described above and does not change.
+
+```bash
+cd deploy/aws
+terraform init
+terraform apply -var bucket_name=your-globally-unique-bucket -var stack=full -var instance_type=m7i-flex.large -var admin_cidr=$(curl -s https://checkip.amazonaws.com)/32
+```
+
+PowerShell:
+
+```powershell
+$ip = (Invoke-RestMethod https://checkip.amazonaws.com).Trim()
+terraform apply -var bucket_name=your-globally-unique-bucket -var stack=full -var instance_type=m7i-flex.large -var admin_cidr="$ip/32"
+```
+
+Add `-var git_ref=<branch or tag>` to build something other than `main`.
+
+- Wait 10-15 minutes: the instance installs Docker and builds the images. The
+  log is `/var/log/cloud-init-output.log` (over SSH, with `ssh_cidr` and
+  `key_name` set).
+- Open `terraform output app_url`, `keycloak_url` and `airflow_url`.
+- App: sign in through Keycloak as `demo_admin` / `demo-password-123` (the
+  other `demo_*` and `ad_*` accounts are in the SSO section). Files go to S3.
+- Airflow UI: `admin` and `terraform output -raw airflow_admin_password`.
+- Keycloak console: `admin` / `admin`.
+- Ports 80, 8080 and 8081 are open **only** to `admin_cidr`: the stack has dev
+  passwords and demo accounts, and runs over plain HTTP. Do not widen it.
+- Cost: `m7i-flex.large` is free only on AWS Free Plan accounts (created after
+  15 July 2025; it spends credits). On older accounts it is a paid type,
+  roughly $0.10-0.15 per hour. Run `terraform destroy` (same `-var` flags)
+  right after the check.
+- To look at the DuckDB table, add `-var ssh_cidr=<your ip>/32` (only the
+  security group changes) and connect with
+  `aws ec2-instance-connect ssh --instance-id <id> --os-user ubuntu --connection-type direct`;
+  no key pair is needed.
+
+Run on 2026-11-13 on an m7i-flex.large and checked end to end, then torn down.
+The proof is in [docs/deploy/full-stack/](docs/deploy/full-stack/):
+
+| | |
+|---|---|
+| [01-keycloak-sign-in.png](docs/deploy/full-stack/01-keycloak-sign-in.png) | the app sends the browser to Keycloak (realm `myapp`) at the public address |
+| [02-signed-in-via-keycloak-ad.png](docs/deploy/full-stack/02-signed-in-via-keycloak-ad.png) | signed in as `ad_alice`, a Samba AD account, through Keycloak |
+| [03-keycloak-user-federation-ad.png](docs/deploy/full-stack/03-keycloak-user-federation-ad.png) | Keycloak's User federation: the LDAP provider (Samba AD) |
+| [04-keycloak-users-from-ad.png](docs/deploy/full-stack/04-keycloak-users-from-ad.png) | the realm's users, the `ad_*` ones coming from AD |
+| [05-airflow-runs.png](docs/deploy/full-stack/05-airflow-runs.png) | `process_upload` runs started by the app's user `django` after uploads, both successful |
+| [06-airflow-xcom-locate.png](docs/deploy/full-stack/06-airflow-xcom-locate.png) | the file read straight from S3, grouped by its first text column `category` |
+| [07-airflow-xcom-group-and-save.png](docs/deploy/full-stack/07-airflow-xcom-group-and-save.png) | 3 groups saved |
+| [08-duckdb-upload-groups.txt](docs/deploy/full-stack/08-duckdb-upload-groups.txt) | the `upload_groups` table in DuckDB on the instance |
+| [09-terraform-destroy.txt](docs/deploy/full-stack/09-terraform-destroy.txt) | the teardown: 12 resources destroyed, nothing left in the account |
+
 ### Tearing it all down afterwards
 
 ```bash
@@ -916,10 +971,10 @@ tests/            pytest-django
   not the live upload -> DuckDB chain). Airflow runs in
   `standalone` mode, one container with its own SQLite, so the run history is
   gone when the container is recreated; the results in DuckDB stay.
-* Airflow exists only locally (`docker-compose.airflow.yml`). The AWS stand does
-  not run it: the instance is a t3.micro with 1 GB of RAM, and Airflow in
-  `standalone` mode needs more. There `AIRFLOW_API_URL` is empty, so uploads are
-  saved and not processed.
+* Airflow does not run in `stack=app` (a t3.micro with 1 GB of RAM is too small
+  for it), so there `AIRFLOW_API_URL` is empty and uploads are saved and not
+  processed. `stack=full` on an m7i-flex.large runs it, but that setup is
+  not checked by any automated test.
 * Renaming or deleting a file does not remove its rows from `upload_groups` in
   DuckDB.
 * A table file is read twice: once for the schema (to pick the column), once for
