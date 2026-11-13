@@ -1,0 +1,22 @@
+# terraform destroy, 2026-11-13 (after: aws s3 rm --recursive on the bucket)
+aws_s3_bucket_public_access_block.files: Destruction complete after 0s
+aws_iam_role_policy.app_s3: Destruction complete after 1s
+aws_s3_bucket_server_side_encryption_configuration.files: Destruction complete after 1s
+aws_instance.app: Destruction complete after 30s
+random_password.airflow_admin[0]: Destruction complete after 0s
+random_password.secret_key: Destruction complete after 0s
+random_password.db_password: Destruction complete after 0s
+random_password.airflow_user[0]: Destruction complete after 0s
+aws_iam_instance_profile.app: Destruction complete after 1s
+aws_s3_bucket.files: Destruction complete after 1s
+aws_security_group.app: Destruction complete after 1s
+aws_iam_role.app: Destruction complete after 0s
+Destroy complete! Resources: 12 destroyed.
+
+# Left in the account afterwards (eu-central-1):
+$ aws ec2 describe-instances (not terminated, tag Project=users-and-roles)
+$ aws s3api head-bucket --bucket users-and-roles-595182
+aws: [ERROR]: An error occurred (404) when calling the HeadBucket operation: Not Found
+$ aws iam get-role --role-name users-and-roles-app
+aws: [ERROR]: An error occurred (NoSuchEntity) when calling the GetRole operation: The role with name users-and-roles-app cannot be found.
+$ aws ec2 describe-security-groups (group-name users-and-roles-app)

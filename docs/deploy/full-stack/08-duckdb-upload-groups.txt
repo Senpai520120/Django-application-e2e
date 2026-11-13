@@ -1,0 +1,13 @@
+# On the instance (EC2 Instance Connect, 2026-11-13), read-only:
+# sudo docker exec <airflow> python -c "import duckdb; print(duckdb.connect(
+#   '/data/analytics/analytics.duckdb', read_only=True).sql('select ... from upload_groups'))"
+┌─────────────────────┬──────────────┬─────────────┬───────────┬────────────────────────────┐
+│       source        │ group_column │ group_value │ row_count │        processed_at        │
+│       varchar       │   varchar    │   varchar   │   int64   │         timestamp          │
+├─────────────────────┼──────────────┼─────────────┼───────────┼────────────────────────────┤
+│ aws_check.csv       │ city         │ Kyiv        │         2 │ 2026-11-13 18:53:16.485784 │
+│ aws_check.csv       │ city         │ Lviv        │         1 │ 2026-11-13 18:53:16.485784 │
+│ folder/products.csv │ category     │ Dairy       │        25 │ 2026-11-13 19:03:54.643043 │
+│ folder/products.csv │ category     │ Fruits      │        25 │ 2026-11-13 19:03:54.643043 │
+│ folder/products.csv │ category     │ Vegetables  │        25 │ 2026-11-13 19:03:54.643043 │
+└─────────────────────┴──────────────┴─────────────┴───────────┴────────────────────────────┘
