@@ -9,8 +9,10 @@ from moto.server import ThreadedMotoServer
 from upload_groups import (
     UploadError,
     file_columns,
+    file_schema,
     filestore_root,
     pick_column,
+    pick_group_column,
     resolve_upload,
     s3_secret,
     save_groups,
@@ -198,3 +200,30 @@ def test_s3_secret_matches_the_app_settings():
     assert "PROVIDER credential_chain" in secret
     assert "KEY_ID" not in secret
     assert "ENDPOINT" not in secret
+
+
+def test_default_group_column_is_the_first_text_one(tmp_path):
+    csv = tmp_path / "orders.csv"
+    csv.write_text("id,amount,customer,city\n1,10.5,ann,Kyiv\n2,7.0,bob,Lviv\n")
+
+    schema = file_schema(csv)
+
+    assert [name for name, _ in schema] == ["id", "amount", "customer", "city"]
+    assert pick_group_column(schema, None) == "customer"
+    assert pick_group_column(schema, "") == "customer"
+
+
+def test_group_column_falls_back_to_the_first_when_no_text():
+    schema = [("id", "BIGINT"), ("amount", "DOUBLE")]
+
+    assert pick_group_column(schema, None) == "id"
+
+
+def test_requested_group_column_wins_and_is_checked():
+    schema = [("id", "BIGINT"), ("name", "VARCHAR")]
+
+    assert pick_group_column(schema, "id") == "id"
+    with pytest.raises(UploadError, match="No column"):
+        pick_group_column(schema, "nope")
+    with pytest.raises(UploadError, match="no columns"):
+        pick_group_column([], None)

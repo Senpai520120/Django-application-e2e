@@ -11,9 +11,9 @@ import os
 
 from airflow.sdk import Param, dag, task
 from upload_groups import (
-    file_columns,
+    file_schema,
     filestore_root,
-    pick_column,
+    pick_group_column,
     resolve_upload,
     save_groups,
 )
@@ -29,7 +29,9 @@ DUCKDB_PATH = os.environ.get("DUCKDB_PATH", "/data/analytics/analytics.duckdb")
     params={
         "path": Param(type="string", description="Path inside the file manager"),
         "group_by": Param(
-            None, type=["null", "string"], description="Column; the first if empty"
+            None,
+            type=["null", "string"],
+            description="Column; the first text one if empty",
         ),
     },
     tags=["uploads"],
@@ -41,7 +43,7 @@ def process_upload():
         # Read in the task, not at import: a wrong storage setting fails this
         # run with a clear message instead of hiding the whole DAG.
         path = resolve_upload(filestore_root(os.environ), params["path"])
-        column = pick_column(file_columns(path), params["group_by"])
+        column = pick_group_column(file_schema(path), params["group_by"])
         return {"path": path, "column": column}
 
     @task

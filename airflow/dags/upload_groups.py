@@ -132,14 +132,19 @@ def reader(path: str | Path) -> str:
         raise UploadError(f"Not a table file: {name.name!r}") from None
 
 
-def file_columns(path: str | Path) -> list[str]:
+def file_schema(path: str | Path) -> list[tuple[str, str]]:
+    """(name, DuckDB type) of each column, as DuckDB reads the file."""
     with connect() as con:
         return [
-            row[0]
+            (row[0], row[1])
             for row in con.execute(
                 f"DESCRIBE SELECT * FROM {reader(path)}(?)", [str(path)]
             ).fetchall()
         ]
+
+
+def file_columns(path: str | Path) -> list[str]:
+    return [name for name, _ in file_schema(path)]
 
 
 def pick_column(columns: list[str], wanted: str | None) -> str:
@@ -151,6 +156,21 @@ def pick_column(columns: list[str], wanted: str | None) -> str:
     if wanted not in columns:
         raise UploadError(f"No column {wanted!r}; the file has {columns}.")
     return wanted
+
+
+def pick_group_column(schema: list[tuple[str, str]], wanted: str | None) -> str:
+    """The column to group by: the requested one, else the first text column.
+
+    A text (VARCHAR) column is the natural thing to group by; an id or an
+    amount is not. With no text column at all, the first column is used.
+    """
+    names = [name for name, _ in schema]
+    if wanted:
+        return pick_column(names, wanted)
+    for name, type_ in schema:
+        if type_.upper() == "VARCHAR":
+            return name
+    return pick_column(names, None)
 
 
 def save_groups(db_path: str | Path, path: str | Path, source: str, column: str) -> int:
