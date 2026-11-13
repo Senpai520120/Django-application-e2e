@@ -23,4 +23,8 @@ USER app
 EXPOSE 8000
 
 ENTRYPOINT ["/app/docker/entrypoint.sh"]
-CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3", "--access-logfile", "-"]
+# Threaded workers: with sync workers a browser's idle pre-opened (keep-alive)
+# connection holds a whole worker until the 30 s timeout: gunicorn logs
+# WORKER TIMEOUT and kills it, the client gets a dropped connection. Threads
+# keep such connections from tying up a worker.
+CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3", "--worker-class", "gthread", "--threads", "4", "--access-logfile", "-"]
