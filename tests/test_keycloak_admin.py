@@ -67,6 +67,7 @@ class FakeKeycloak:
         if self.down:
             raise requests.ConnectionError("connection refused")
         assert data["grant_type"] == "client_credentials"
+        assert data["scope"] == "kc-admin-api"
         self.tokens_given += 1
         return FakeResponse(200, {"access_token": "service-token", "expires_in": 300})
 
