@@ -1,4 +1,4 @@
-# Processing of uploaded CSV files in Airflow. Laid over the main file:
+# Processing of uploaded .csv/.xlsx/.json/.parquet files in Airflow. Laid over the main file:
 #   docker compose -f docker-compose.yml -f docker-compose.airflow.yml up -d --build
 # Airflow UI: http://localhost:8081 (admin, password from AIRFLOW_ADMIN_PASSWORD in .env).
 # Results: the upload_groups table in the DuckDB file on the analytics volume.
