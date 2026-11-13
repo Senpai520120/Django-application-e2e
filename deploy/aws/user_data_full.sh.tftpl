@@ -1,0 +1,97 @@
+#!/bin/bash
+# Full stack: app + S3 + Airflow/DuckDB + Keycloak SSO + Samba AD, built from
+# the repository on this instance. Log: /var/log/cloud-init-output.log
+set -euxo pipefail
+
+apt-get update
+apt-get install -y docker.io docker-compose-v2 git python3
+
+systemctl enable --now docker
+
+# Images are built here; a swap file keeps a build from being OOM-killed.
+if ! swapon --show | grep -q /swapfile; then
+  fallocate -l 4G /swapfile
+  chmod 600 /swapfile
+  mkswap /swapfile
+  swapon /swapfile
+fi
+
+install -d -m 0750 /opt/app
+git clone --depth 1 -b ${git_ref} ${repo_url} /opt/app/src
+cd /opt/app/src
+
+# The public address is read from instance metadata (IMDSv2, token required).
+IMDS_TOKEN=$(curl -sX PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
+PUBLIC_IP=$(curl -s -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/meta-data/public-ipv4)
+
+# Also the source of variable substitution in the compose files. AWS keys are left unset on
+# purpose (the app and Airflow both use the instance IAM role).
+cat > .env <<ENV
+SECRET_KEY=${secret_key}
+DEBUG=False
+ALLOWED_HOSTS=$PUBLIC_IP,localhost,127.0.0.1
+CSRF_TRUSTED_ORIGINS=http://$PUBLIC_IP
+FILE_STORAGE_BACKEND=s3
+AWS_STORAGE_BUCKET_NAME=${bucket}
+AWS_S3_REGION_NAME=${region}
+FILE_MANAGER_S3_LOCATION=filemanager
+SEED_DEMO_USERS=1
+USE_X_FORWARDED_PROTO=False
+AIRFLOW_USERNAME=django
+AIRFLOW_PASSWORD=${airflow_password}
+AIRFLOW_ADMIN_PASSWORD=${airflow_admin_password}
+ENV
+chmod 0640 .env
+
+# The compose files bind Keycloak and Airflow to 127.0.0.1. Here they must be
+# reachable from the admin address (the security group does the filtering).
+sed -i 's|"127.0.0.1:8080:8080"|"8080:8080"|' docker-compose.sso.yml
+sed -i 's|"127.0.0.1:8081:8080"|"8081:8080"|' docker-compose.airflow.yml
+grep -q '"8080:8080"' docker-compose.sso.yml
+grep -q '"8081:8080"' docker-compose.airflow.yml
+
+# The browser reaches Keycloak at the public address; the app inside docker
+# still uses keycloak:8080 (OIDC_BACKEND_URL from docker-compose.sso.yml).
+cat > compose.aws.yml <<COMPOSE
+services:
+  keycloak:
+    environment:
+      KC_HOSTNAME: http://$PUBLIC_IP:8080
+  web:
+    ports:
+      - "80:8000"
+    environment:
+      OIDC_BROWSER_URL: http://$PUBLIC_IP:8080/realms/myapp
+      OIDC_POST_LOGOUT_REDIRECT_URL: http://$PUBLIC_IP/
+COMPOSE
+
+# Allow the public address in the Keycloak client and plain http (the default
+# "external" refuses http for non-private addresses). Imported on first start.
+PUBLIC_IP=$PUBLIC_IP python3 - <<'PY'
+import json, os
+ip = os.environ["PUBLIC_IP"]
+path = "keycloak/realm-myapp.json"
+with open(path, encoding="utf-8") as f:
+    realm = json.load(f)
+realm["sslRequired"] = "none"
+for c in realm["clients"]:
+    if c["clientId"] == "django-app":
+        c["redirectUris"].append("http://" + ip + "/oidc/callback/")
+        a = c["attributes"]
+        a["post.logout.redirect.uris"] += "##http://" + ip + "/*"
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(realm, f, indent=2, ensure_ascii=False)
+PY
+
+COMPOSE_FILES="-f docker-compose.yml -f docker-compose.airflow.yml -f docker-compose.sso.yml -f docker-compose.ad.yml -f compose.aws.yml"
+docker compose $COMPOSE_FILES up -d --build
+
+# The master realm (admin console) also refuses http on a public address.
+set +x
+for i in $(seq 1 60); do
+  if docker compose $COMPOSE_FILES exec -T keycloak sh -c '/opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user admin --password admin && /opt/keycloak/bin/kcadm.sh update realms/master -s sslRequired=NONE'; then
+    break
+  fi
+  sleep 10
+done
+echo "Full stack is up: http://$PUBLIC_IP/"
