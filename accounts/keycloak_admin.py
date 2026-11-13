@@ -13,6 +13,7 @@ kc-admin-api scope that the Admin API requires.
 
 import base64
 import json
+import threading
 import time
 
 import requests
@@ -173,30 +174,33 @@ def error_message(response):
 
 # The service-account token, reused until shortly before it expires:
 # pushing many users at start would otherwise ask for one per request.
+# The lock keeps threads of one worker from asking for a token all at once.
 _token = {"value": None, "expires": 0.0}
+_token_lock = threading.Lock()
 
 
 def service_token():
-    if _token["value"] and time.monotonic() < _token["expires"]:
+    with _token_lock:
+        if _token["value"] and time.monotonic() < _token["expires"]:
+            return _token["value"]
+        response = requests.post(
+            settings.OIDC_OP_TOKEN_ENDPOINT,
+            data={
+                "grant_type": "client_credentials",
+                "client_id": settings.OIDC_RP_CLIENT_ID,
+                "client_secret": settings.OIDC_RP_CLIENT_SECRET,
+                # Since Keycloak 26.8.2 the Admin API takes only tokens of this
+                # scope. It is optional on the client, so sign-in tokens stay
+                # without the Admin API audience.
+                "scope": "kc-admin-api",
+            },
+            timeout=TIMEOUT,
+        )
+        response.raise_for_status()
+        body = response.json()
+        _token["value"] = body["access_token"]
+        _token["expires"] = time.monotonic() + int(body.get("expires_in", 60)) - 30
         return _token["value"]
-    response = requests.post(
-        settings.OIDC_OP_TOKEN_ENDPOINT,
-        data={
-            "grant_type": "client_credentials",
-            "client_id": settings.OIDC_RP_CLIENT_ID,
-            "client_secret": settings.OIDC_RP_CLIENT_SECRET,
-            # Since Keycloak 26.8.2 the Admin API takes only tokens of this
-            # scope. It is optional on the client, so sign-in tokens stay
-            # without the Admin API audience.
-            "scope": "kc-admin-api",
-        },
-        timeout=TIMEOUT,
-    )
-    response.raise_for_status()
-    body = response.json()
-    _token["value"] = body["access_token"]
-    _token["expires"] = time.monotonic() + int(body.get("expires_in", 60)) - 30
-    return _token["value"]
 
 
 def call(method, path, **kwargs):

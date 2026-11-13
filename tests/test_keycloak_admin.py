@@ -6,6 +6,7 @@ the hashes was checked against a live one (see accounts/keycloak_admin.py).
 
 import base64
 import json
+import threading
 from io import StringIO
 from unittest.mock import patch
 
@@ -383,6 +384,35 @@ def test_one_token_serves_many_calls(keycloak, plain_user, group_admin):
     push_all()
     push_all()
 
+    assert keycloak.tokens_given == 1
+
+
+@pytest.mark.django_db
+def test_threads_ask_for_one_token_together(keycloak):
+    threads_count = 8
+    start = threading.Barrier(threads_count)
+    original_post = keycloak.post
+
+    def slow_post(url, data, timeout):
+        # Hold the first request open, so that without the lock the other
+        # threads would reach the token endpoint too.
+        threading.Event().wait(0.2)
+        return original_post(url, data, timeout)
+
+    tokens = []
+
+    def ask():
+        start.wait()
+        tokens.append(keycloak_admin.service_token())
+
+    with patch("accounts.keycloak_admin.requests.post", slow_post):
+        threads = [threading.Thread(target=ask) for _ in range(threads_count)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+    assert tokens == ["service-token"] * threads_count
     assert keycloak.tokens_given == 1
 
 
