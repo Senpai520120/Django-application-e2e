@@ -8,7 +8,8 @@ upload never waits for them and keeps working while Airflow is down.
 import requests
 from django.conf import settings
 
-TIMEOUT = 5
+# (connect, read): a down Airflow must not hold the upload request for long.
+TIMEOUT = (2, 5)
 
 DAG_ID = "process_upload"
 
@@ -30,25 +31,31 @@ def should_process(name: str) -> bool:
 
 
 def access_token() -> str:
-    # A token per upload: uploads are rare, and an expired one is never kept.
-    response = requests.post(
-        f"{settings.AIRFLOW_API_URL}/auth/token",
-        json={
-            "username": settings.AIRFLOW_USERNAME,
-            "password": settings.AIRFLOW_PASSWORD,
-        },
-        timeout=TIMEOUT,
-    )
-    response.raise_for_status()
-    return response.json()["access_token"]
+    """A token for one upload: an expired one is never kept."""
+    try:
+        response = requests.post(
+            f"{settings.AIRFLOW_API_URL}/auth/token",
+            json={
+                "username": settings.AIRFLOW_USERNAME,
+                "password": settings.AIRFLOW_PASSWORD,
+            },
+            timeout=TIMEOUT,
+        )
+        response.raise_for_status()
+        return response.json()["access_token"]
+    except (requests.RequestException, ValueError, KeyError) as error:
+        raise ProcessingUnavailable(str(error)) from error
 
 
-def trigger_processing(path: str) -> str:
-    """Start a run for the file at `path` in the file manager; returns its id."""
+def trigger_processing(path: str, token: str | None = None) -> str:
+    """Start a run for the file at `path` in the file manager; returns its id.
+
+    Pass the `token` from access_token() to reuse it for several files.
+    """
     try:
         response = requests.post(
             f"{settings.AIRFLOW_API_URL}/api/v2/dags/{DAG_ID}/dagRuns",
-            headers={"Authorization": f"Bearer {access_token()}"},
+            headers={"Authorization": f"Bearer {token or access_token()}"},
             # No logical date: the run is not tied to a schedule interval.
             json={"logical_date": None, "conf": {"path": path}},
             timeout=TIMEOUT,

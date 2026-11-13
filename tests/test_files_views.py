@@ -1,11 +1,14 @@
 """File manager views: access, limits, and path safety."""
 
 import pytest
+import requests
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.files.uploadhandler import TemporaryFileUploadHandler
 from django.urls import reverse
 
+from files import pipeline
 from files.pipeline import ProcessingUnavailable
+from tests.test_files_pipeline import FakeResponse
 
 FILE_URLS = [
     ("files:browse", {}),
@@ -353,10 +356,11 @@ def triggered(settings, monkeypatch):
     settings.AIRFLOW_API_URL = "http://airflow.test"
     seen = []
 
-    def fake_trigger(path):
+    def fake_trigger(path, token):
         seen.append(path)
         return "manual__1"
 
+    monkeypatch.setattr("files.views.access_token", lambda: "jwt")
     monkeypatch.setattr("files.views.trigger_processing", fake_trigger)
     return seen
 
@@ -389,10 +393,10 @@ def test_upload_is_kept_when_processing_does_not_start(
 ):
     settings.AIRFLOW_API_URL = "http://airflow.test"
 
-    def refuse(path):
+    def refuse():
         raise ProcessingUnavailable("connection refused")
 
-    monkeypatch.setattr("files.views.trigger_processing", refuse)
+    monkeypatch.setattr("files.views.access_token", refuse)
     payload = SimpleUploadedFile("sales.csv", b"category\nbooks\n")
 
     response = user_client.post(
@@ -401,6 +405,53 @@ def test_upload_is_kept_when_processing_does_not_start(
 
     assert [entry.name for entry in response.context["entries"]] == ["sales.csv"]
     assert "processing did not start" in response.content.decode()
+
+
+@pytest.mark.django_db
+def test_airflow_down_is_tried_once_for_a_whole_upload(
+    user_client, settings, monkeypatch
+):
+    settings.AIRFLOW_API_URL = "http://airflow.test"
+    attempts = []
+
+    def refuse(url, **kwargs):
+        attempts.append(url)
+        raise requests.ConnectionError("connection refused")
+
+    monkeypatch.setattr(pipeline.requests, "post", refuse)
+    names = [f"part{number}.csv" for number in range(7)]
+    payload = [SimpleUploadedFile(name, b"x") for name in names]
+
+    response = user_client.post(
+        reverse("files:upload"), {"path": "", "files": payload}, follow=True
+    )
+
+    assert len(attempts) == 1
+    assert sorted(entry.name for entry in response.context["entries"]) == names
+    warnings = [m for m in response.context["messages"] if m.level_tag == "warning"]
+    assert len(warnings) == 1
+
+
+@pytest.mark.django_db
+def test_one_token_is_used_for_all_files_of_an_upload(
+    user_client, settings, monkeypatch
+):
+    settings.AIRFLOW_API_URL = "http://airflow.test"
+    urls = []
+
+    def fake_post(url, **kwargs):
+        urls.append(url)
+        if url.endswith("/auth/token"):
+            return FakeResponse({"access_token": "jwt"}, status=201)
+        return FakeResponse({"dag_run_id": "manual__1"})
+
+    monkeypatch.setattr(pipeline.requests, "post", fake_post)
+    payload = [SimpleUploadedFile(name, b"x") for name in ("a.csv", "b.csv", "c.csv")]
+
+    user_client.post(reverse("files:upload"), {"path": "", "files": payload})
+
+    assert sum(url.endswith("/auth/token") for url in urls) == 1
+    assert sum(url.endswith("/dagRuns") for url in urls) == 3
 
 
 @pytest.mark.django_db
