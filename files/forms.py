@@ -79,6 +79,11 @@ class UploadForm(forms.Form):
     # Not required at field level: a file dropped by SizeLimitUploadHandler
     # must be reported as too large, not as missing.
     files = MultipleFileField(label=_("Files"), required=False)
+    # Saved as a GroupingRule for each table file of the upload; Airflow
+    # groups the file by it. Empty: the first text column.
+    group_by = forms.CharField(
+        label=_("Group by column"), max_length=255, required=False, strip=True
+    )
 
     def __init__(self, *args, oversized=(), **kwargs):
         super().__init__(*args, **kwargs)

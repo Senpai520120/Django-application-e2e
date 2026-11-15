@@ -318,7 +318,7 @@ jobs:
           sed -i "s|^SECRET_KEY=.*|SECRET_KEY=$KEY|" .env
           {
             echo "AIRFLOW_ADMIN_PASSWORD=$(python -c 'import secrets; print(secrets.token_urlsafe(24))')"
-            echo "AIRFLOW_PASSWORD=$(python -c 'import secrets; print(secrets.token_urlsafe(24))')"
+            echo "PIPELINE_API_TOKEN=$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
           } >> .env
 
       - name: Start Airflow
@@ -339,7 +339,7 @@ jobs:
           found = json.loads(text[text.index("["):])
           assert found == [], found
           PY
-          $compose exec -T airflow airflow dags list -o json | grep -q process_upload
+          $compose exec -T airflow airflow dags list -o json | grep -q watch_uploads
 
       - name: Container logs
         if: failure()

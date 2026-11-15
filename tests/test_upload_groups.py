@@ -1,5 +1,7 @@
 """The DAG's grouping, run against a real DuckDB file."""
 
+import io
+import json
 import os
 
 import boto3
@@ -8,17 +10,25 @@ import pytest
 from moto.server import ThreadedMotoServer
 from upload_groups import (
     UploadError,
+    fetch_rules,
     file_columns,
     file_schema,
     filestore_root,
+    list_table_files,
+    mark_failed,
+    pending,
     pick_column,
     pick_group_column,
+    processed_files,
     resolve_upload,
     s3_secret,
     save_groups,
 )
 
 SALES = "category,amount\nbooks,10\ntoys,5\nbooks,7\n"
+
+# The done mark every save_groups call writes; most tests do not look at it.
+MARK = {"mtime_ms": 1, "group_by": ""}
 
 
 @pytest.fixture
@@ -43,7 +53,7 @@ def test_groups_by_the_first_column(store, tmp_path):
 
     db = tmp_path / "a.duckdb"
 
-    assert save_groups(db, path, "reports/sales.csv", column) == 2
+    assert save_groups(db, path, "reports/sales.csv", column, **MARK) == 2
     assert rows(db) == [
         ("reports/sales.csv", "category", "books", 2),
         ("reports/sales.csv", "category", "toys", 1),
@@ -54,8 +64,8 @@ def test_same_file_again_replaces_its_groups(store, tmp_path):
     db = tmp_path / "a.duckdb"
     path = resolve_upload(store, "reports/sales.csv")
 
-    save_groups(db, path, "reports/sales.csv", "category")
-    save_groups(db, path, "reports/sales.csv", "category")
+    save_groups(db, path, "reports/sales.csv", "category", **MARK)
+    save_groups(db, path, "reports/sales.csv", "category", **MARK)
 
     assert len(rows(db)) == 2
 
@@ -98,7 +108,7 @@ def test_every_table_format_is_grouped(table_files, tmp_path, name):
     db = tmp_path / "a.duckdb"
 
     assert file_columns(path) == ["category", "amount"]
-    assert save_groups(db, path, name, "category") == 2
+    assert save_groups(db, path, name, "category", **MARK) == 2
     assert rows(db) == [(name, "category", "books", 2), (name, "category", "toys", 1)]
 
 
@@ -157,7 +167,7 @@ def test_file_in_s3_is_grouped(bucket, tmp_path):
 
     assert path == "s3://uploads/filemanager/reports/sales.csv"
     assert file_columns(path) == ["category", "amount"]
-    assert save_groups(db, path, "reports/sales.csv", "category") == 2
+    assert save_groups(db, path, "reports/sales.csv", "category", **MARK) == 2
     assert rows(db) == [
         ("reports/sales.csv", "category", "books", 2),
         ("reports/sales.csv", "category", "toys", 1),
@@ -227,3 +237,91 @@ def test_requested_group_column_wins_and_is_checked():
         pick_group_column(schema, "nope")
     with pytest.raises(UploadError, match="no columns"):
         pick_group_column([], None)
+
+
+def test_table_files_are_listed_with_their_times(store):
+    (store / "reports" / "q1").mkdir()
+    (store / "reports" / "q1" / "B.CSV").write_text(SALES)
+    (store / "notes.txt").write_text("hello")
+
+    files = list_table_files(store)
+
+    assert sorted(files) == ["reports/q1/B.CSV", "reports/sales.csv"]
+    assert all(isinstance(mtime, int) and mtime > 0 for mtime in files.values())
+
+
+def test_empty_or_missing_store_lists_nothing(tmp_path):
+    assert list_table_files(tmp_path) == {}
+    assert list_table_files(tmp_path / "nope") == {}
+
+
+def test_files_in_s3_are_listed(bucket):
+    files = list_table_files(filestore_root(os.environ))
+
+    assert list(files) == ["reports/sales.csv"]
+
+
+def test_pending_takes_only_what_changed():
+    files = {"new.csv": 5, "same.csv": 5, "again.csv": 9, "column.csv": 5}
+    rules = {"same.csv": "city", "again.csv": "", "column.csv": "country"}
+    processed = {
+        "same.csv": (5, "city"),
+        "again.csv": (5, ""),
+        "column.csv": (5, "device"),
+        "deleted.csv": (5, ""),
+    }
+
+    todo = pending(files, rules, processed)
+
+    assert todo == [
+        {"path": "again.csv", "mtime_ms": 9, "group_by": ""},
+        {"path": "column.csv", "mtime_ms": 5, "group_by": "country"},
+        {"path": "new.csv", "mtime_ms": 5, "group_by": ""},
+    ]
+
+
+def test_saved_file_is_marked_done(store, tmp_path):
+    db = tmp_path / "a.duckdb"
+    path = resolve_upload(store, "reports/sales.csv")
+
+    save_groups(db, path, "reports/sales.csv", "category", mtime_ms=7, group_by="")
+
+    done = processed_files(db)
+    assert done == {"reports/sales.csv": (7, "")}
+    assert pending({"reports/sales.csv": 7}, {}, done) == []
+
+
+def test_failed_file_is_not_taken_again(tmp_path):
+    db = tmp_path / "a.duckdb"
+
+    mark_failed(db, "seo.csv", 3, "price", "No column 'price'")
+
+    assert pending({"seo.csv": 3}, {"seo.csv": "price"}, processed_files(db)) == []
+    with duckdb.connect(str(db)) as con:
+        assert con.execute("SELECT status, error FROM processed_files").fetchall() == [
+            ("failed", "No column 'price'")
+        ]
+
+
+def test_fresh_database_has_nothing_processed(tmp_path):
+    assert processed_files(tmp_path / "a.duckdb") == {}
+
+
+def test_rules_are_fetched_with_the_token(monkeypatch):
+    seen = {}
+
+    def fake_urlopen(request, timeout):
+        seen["auth"] = request.get_header("Authorization")
+        seen["timeout"] = timeout
+        body = [
+            {"path": "seo.csv", "group_by": "device"},
+            {"path": "a.csv", "group_by": ""},
+        ]
+        return io.BytesIO(json.dumps(body).encode())
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    rules = fetch_rules("http://web:8000/files/api/grouping-rules/", "tok")
+
+    assert rules == {"seo.csv": "device", "a.csv": ""}
+    assert seen == {"auth": "Bearer tok", "timeout": 5}
