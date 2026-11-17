@@ -242,12 +242,10 @@ AWS_DEFAULT_ACL = None
 AWS_S3_FILE_OVERWRITE = False
 AWS_QUERYSTRING_AUTH = True
 
-# Processing of uploaded .csv/.xlsx/.json/.parquet files in Airflow
-# (docker-compose.airflow.yml). The password is the app user's, from .env.
-# Left empty, uploads are only saved and never sent anywhere.
-AIRFLOW_API_URL = env("AIRFLOW_API_URL", default="")
-AIRFLOW_USERNAME = env("AIRFLOW_USERNAME", default="")
-AIRFLOW_PASSWORD = env("AIRFLOW_PASSWORD", default="")
+# Grouping of uploaded .csv/.xlsx/.json/.parquet files in Airflow
+# (docker-compose.airflow.yml). Airflow sends this token to read the grouping
+# rules; left empty, the rules API is off and uploads are only stored.
+PIPELINE_API_TOKEN = env("PIPELINE_API_TOKEN", default="")
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 

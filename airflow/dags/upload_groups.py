@@ -1,4 +1,4 @@
-"""Grouping an uploaded table file by one column into DuckDB.
+"""Finding new uploaded table files and grouping them by one column into DuckDB.
 
 Plain functions with no Airflow import: the DAG calls them, and the app's
 tests run them against a real DuckDB file without an Airflow install.
@@ -6,7 +6,9 @@ tests run them against a real DuckDB file without an Airflow install.
 
 from __future__ import annotations
 
+import json
 import os
+import urllib.request
 from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
@@ -31,6 +33,22 @@ CREATE_TABLE = f"""
         group_column VARCHAR NOT NULL,
         group_value  VARCHAR,
         row_count    BIGINT NOT NULL,
+        processed_at TIMESTAMP NOT NULL DEFAULT current_timestamp
+    )
+"""
+
+
+# What is already done, so the sensor never takes a file twice. A row is one
+# version of a file (its modification time) grouped by one rule's column.
+PROCESSED = "processed_files"
+
+CREATE_PROCESSED = f"""
+    CREATE TABLE IF NOT EXISTS {PROCESSED} (
+        source       VARCHAR PRIMARY KEY,
+        mtime_ms     BIGINT NOT NULL,
+        group_by     VARCHAR NOT NULL,
+        status       VARCHAR NOT NULL,
+        error        VARCHAR,
         processed_at TIMESTAMP NOT NULL DEFAULT current_timestamp
     )
 """
@@ -122,6 +140,88 @@ def resolve_upload(root: str | Path, relative: str) -> str:
     return str(target)
 
 
+def list_table_files(root: str | Path) -> dict[str, int]:
+    """Every table file under `root`: {path inside it: modified time in ms}.
+
+    read_blob lists the files of a folder or of a bucket prefix alike and
+    reads no content unless asked for it. An empty or missing folder gives {}.
+    """
+    base = str(root).rstrip("/\\")
+    with connect() as con:
+        found = con.execute(
+            "SELECT filename, epoch_ms(last_modified) FROM read_blob(?)",
+            [f"{base}/**"],
+        ).fetchall()
+    files = {}
+    for filename, mtime_ms in found:
+        # Windows separators in tests; the containers have only "/".
+        relative = filename[len(base) :].replace("\\", "/").lstrip("/")
+        if PurePosixPath(relative).suffix.lower() in READERS:
+            files[relative] = mtime_ms
+    return files
+
+
+def fetch_rules(url: str, token: str, timeout: float = 5) -> dict[str, str]:
+    """The grouping rules from the app's API: {path: column, "" for default}.
+
+    Any failure raises: the sensor must not guess the columns while the app
+    is down, it fails and is retried instead.
+    """
+    request = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return {rule["path"]: rule["group_by"] for rule in json.load(response)}
+
+
+def processed_files(db_path: str | Path) -> dict[str, tuple[int, str]]:
+    """{source: (modified time in ms, rule's column)} of every file done so far."""
+    with connect(db_path) as con:
+        con.execute(CREATE_PROCESSED)
+        rows = con.execute(f"SELECT source, mtime_ms, group_by FROM {PROCESSED}")
+        return {
+            source: (mtime_ms, group_by)
+            for source, mtime_ms, group_by in rows.fetchall()
+        }
+
+
+def pending(
+    files: Mapping[str, int],
+    rules: Mapping[str, str],
+    processed: Mapping[str, tuple[int, str]],
+) -> list[dict]:
+    """The files to group now: new ones, changed ones, ones with a new column.
+
+    A file that failed is done too: it is not tried again until it is
+    uploaded anew. A file with no rule (uploaded before the rules existed)
+    goes by the first text column.
+    """
+    todo = []
+    for path, mtime_ms in sorted(files.items()):
+        group_by = rules.get(path, "")
+        if processed.get(path) != (mtime_ms, group_by):
+            todo.append({"path": path, "mtime_ms": mtime_ms, "group_by": group_by})
+    return todo
+
+
+def _mark(con, source: str, mtime_ms: int, group_by: str, error: str | None) -> None:
+    con.execute(CREATE_PROCESSED)
+    con.execute(
+        f"""
+        INSERT OR REPLACE INTO {PROCESSED}
+            (source, mtime_ms, group_by, status, error, processed_at)
+        VALUES (?, ?, ?, ?, ?, current_timestamp)
+        """,
+        [source, mtime_ms, group_by, "failed" if error else "done", error],
+    )
+
+
+def mark_failed(
+    db_path: str | Path, source: str, mtime_ms: int, group_by: str, error: str
+) -> None:
+    """Remember a file that cannot be grouped, so it is not tried every tick."""
+    with connect(db_path) as con:
+        _mark(con, source, mtime_ms, group_by, error)
+
+
 def reader(path: str | Path) -> str:
     """The DuckDB function that reads the file, chosen by its extension."""
     # PurePosixPath, not Path: Path would fold the // of s3://.
@@ -173,8 +273,21 @@ def pick_group_column(schema: list[tuple[str, str]], wanted: str | None) -> str:
     return pick_column(names, None)
 
 
-def save_groups(db_path: str | Path, path: str | Path, source: str, column: str) -> int:
-    """Replace the groups of `source` with fresh ones; returns how many."""
+def save_groups(
+    db_path: str | Path,
+    path: str | Path,
+    source: str,
+    column: str,
+    *,
+    mtime_ms: int,
+    group_by: str,
+) -> int:
+    """Replace the groups of `source` with fresh ones; returns how many.
+
+    The same transaction marks the file done with its modified time and the
+    rule's column (`group_by`, maybe empty), so the groups and the mark never
+    disagree.
+    """
     # A column name cannot be a query parameter, so it is quoted by hand.
     # It is one of the file's own columns already (pick_column).
     quoted = '"' + column.replace('"', '""') + '"'
@@ -192,6 +305,7 @@ def save_groups(db_path: str | Path, path: str | Path, source: str, column: str)
             """,
             [source, column, str(path)],
         )
+        _mark(con, source, mtime_ms, group_by, None)
         con.commit()
         row = con.execute(
             f"SELECT count(*) FROM {TABLE} WHERE source = ?", [source]

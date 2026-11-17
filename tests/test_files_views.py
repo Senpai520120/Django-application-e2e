@@ -1,14 +1,11 @@
 """File manager views: access, limits, and path safety."""
 
 import pytest
-import requests
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.files.uploadhandler import TemporaryFileUploadHandler
 from django.urls import reverse
 
-from files import pipeline
-from files.pipeline import ProcessingUnavailable
-from tests.test_files_pipeline import FakeResponse
+from files.models import GroupingRule
 
 FILE_URLS = [
     ("files:browse", {}),
@@ -350,124 +347,168 @@ def test_delete_of_missing_path_is_404(user_client):
     assert response.status_code == 404
 
 
+TOKEN = "pipeline-token"
+
+
 @pytest.fixture
-def triggered(settings, monkeypatch):
-    """Airflow is configured; the paths it was asked to process."""
-    settings.AIRFLOW_API_URL = "http://airflow.test"
-    seen = []
+def pipeline_on(settings):
+    settings.PIPELINE_API_TOKEN = TOKEN
 
-    def fake_trigger(path, token):
-        seen.append(path)
-        return "manual__1"
 
-    monkeypatch.setattr("files.views.access_token", lambda: "jwt")
-    monkeypatch.setattr("files.views.trigger_processing", fake_trigger)
-    return seen
+def rules():
+    return dict(GroupingRule.objects.values_list("path", "group_by"))
+
+
+def upload(client, path, *files, group_by=""):
+    return client.post(
+        reverse("files:upload"),
+        {"path": path, "files": list(files), "group_by": group_by},
+        follow=True,
+    )
 
 
 @pytest.mark.django_db
-def test_uploaded_csv_is_sent_for_processing(user_client, triggered):
+def test_upload_saves_the_grouping_column(user_client, pipeline_on):
     user_client.post(reverse("files:folder_create"), {"path": "", "name": "reports"})
-    payload = SimpleUploadedFile("sales.csv", b"category\nbooks\n")
 
-    response = user_client.post(
-        reverse("files:upload"), {"path": "reports", "files": payload}, follow=True
+    response = upload(
+        user_client,
+        "reports",
+        SimpleUploadedFile("sales.csv", b"category\nbooks\n"),
+        group_by="category",
     )
 
-    assert triggered == ["reports/sales.csv"]
-    assert "sent for processing" in response.content.decode()
+    assert rules() == {"reports/sales.csv": "category"}
+    assert "grouped by category within a minute" in response.content.decode()
 
 
 @pytest.mark.django_db
-def test_other_uploads_are_not_sent_for_processing(user_client, triggered):
-    payload = SimpleUploadedFile("notes.txt", b"hello")
+def test_upload_without_a_column_leaves_it_to_airflow(user_client, pipeline_on):
+    response = upload(user_client, "", SimpleUploadedFile("sales.csv", b"x"))
 
-    user_client.post(reverse("files:upload"), {"path": "", "files": payload})
-
-    assert triggered == []
+    assert rules() == {"sales.csv": ""}
+    assert "first text column" in response.content.decode()
 
 
 @pytest.mark.django_db
-def test_upload_is_kept_when_processing_does_not_start(
-    user_client, settings, monkeypatch
-):
-    settings.AIRFLOW_API_URL = "http://airflow.test"
+def test_rule_has_the_name_the_file_is_stored_under(user_client, pipeline_on):
+    upload(user_client, "", SimpleUploadedFile("my sales.csv", b"x"))
 
-    def refuse():
-        raise ProcessingUnavailable("connection refused")
+    assert rules() == {"my_sales.csv": ""}
 
-    monkeypatch.setattr("files.views.access_token", refuse)
-    payload = SimpleUploadedFile("sales.csv", b"category\nbooks\n")
 
-    response = user_client.post(
-        reverse("files:upload"), {"path": "", "files": payload}, follow=True
+@pytest.mark.django_db
+def test_other_uploads_get_no_rule(user_client, pipeline_on):
+    upload(user_client, "", SimpleUploadedFile("notes.txt", b"hello"), group_by="x")
+
+    assert rules() == {}
+
+
+@pytest.mark.django_db
+def test_no_rules_without_the_pipeline(user_client, settings):
+    settings.PIPELINE_API_TOKEN = ""
+
+    upload(user_client, "", SimpleUploadedFile("sales.csv", b"x"))
+
+    assert rules() == {}
+
+
+@pytest.mark.django_db
+def test_refused_upload_keeps_the_old_rule(user_client, pipeline_on):
+    upload(user_client, "", SimpleUploadedFile("sales.csv", b"x"), group_by="city")
+
+    response = upload(
+        user_client, "", SimpleUploadedFile("sales.csv", b"y"), group_by="price"
     )
 
-    assert [entry.name for entry in response.context["entries"]] == ["sales.csv"]
-    assert "processing did not start" in response.content.decode()
+    assert rules() == {"sales.csv": "city"}
+    assert "already exists" in response.content.decode()
 
 
 @pytest.mark.django_db
-def test_airflow_down_is_tried_once_for_a_whole_upload(
-    user_client, settings, monkeypatch
-):
-    settings.AIRFLOW_API_URL = "http://airflow.test"
-    attempts = []
+def test_rename_takes_the_rule_along(user_client, pipeline_on):
+    upload(user_client, "", SimpleUploadedFile("a.csv", b"x"), group_by="city")
 
-    def refuse(url, **kwargs):
-        attempts.append(url)
-        raise requests.ConnectionError("connection refused")
+    user_client.post(reverse("files:rename"), {"path": "a.csv", "new_name": "b.csv"})
 
-    monkeypatch.setattr(pipeline.requests, "post", refuse)
-    names = [f"part{number}.csv" for number in range(7)]
-    payload = [SimpleUploadedFile(name, b"x") for name in names]
-
-    response = user_client.post(
-        reverse("files:upload"), {"path": "", "files": payload}, follow=True
-    )
-
-    assert len(attempts) == 1
-    assert sorted(entry.name for entry in response.context["entries"]) == names
-    warnings = [m for m in response.context["messages"] if m.level_tag == "warning"]
-    assert len(warnings) == 1
+    assert rules() == {"b.csv": "city"}
 
 
 @pytest.mark.django_db
-def test_one_token_is_used_for_all_files_of_an_upload(
-    user_client, settings, monkeypatch
-):
-    settings.AIRFLOW_API_URL = "http://airflow.test"
-    urls = []
+def test_renamed_folder_takes_the_rules_of_its_files(user_client, pipeline_on):
+    user_client.post(reverse("files:folder_create"), {"path": "", "name": "q1"})
+    user_client.post(reverse("files:folder_create"), {"path": "", "name": "q10"})
+    upload(user_client, "q1", SimpleUploadedFile("a.csv", b"x"), group_by="city")
+    upload(user_client, "q10", SimpleUploadedFile("b.csv", b"x"))
 
-    def fake_post(url, **kwargs):
-        urls.append(url)
-        if url.endswith("/auth/token"):
-            return FakeResponse({"access_token": "jwt"}, status=201)
-        return FakeResponse({"dag_run_id": "manual__1"})
+    user_client.post(reverse("files:rename"), {"path": "q1", "new_name": "spring"})
 
-    monkeypatch.setattr(pipeline.requests, "post", fake_post)
-    payload = [SimpleUploadedFile(name, b"x") for name in ("a.csv", "b.csv", "c.csv")]
-
-    user_client.post(reverse("files:upload"), {"path": "", "files": payload})
-
-    assert sum(url.endswith("/auth/token") for url in urls) == 1
-    assert sum(url.endswith("/dagRuns") for url in urls) == 3
+    assert rules() == {"spring/a.csv": "city", "q10/b.csv": ""}
 
 
 @pytest.mark.django_db
-def test_table_file_rules_are_shown_when_processing_is_on(user_client, settings):
-    settings.AIRFLOW_API_URL = "http://airflow.test"
+def test_delete_removes_the_rules(user_client, pipeline_on):
+    user_client.post(reverse("files:folder_create"), {"path": "", "name": "q1"})
+    upload(user_client, "q1", SimpleUploadedFile("a.csv", b"x"))
+    upload(user_client, "", SimpleUploadedFile("b.csv", b"x"))
 
+    user_client.post(reverse("files:delete"), {"path": "q1"})
+
+    assert rules() == {"b.csv": ""}
+
+
+def get_rules(client, **headers):
+    return client.get(reverse("files:grouping_rules"), headers=headers)
+
+
+@pytest.mark.django_db
+def test_rules_api_gives_every_rule_to_the_right_token(client, pipeline_on):
+    GroupingRule.objects.create(path="reports/sales.csv", group_by="category")
+    GroupingRule.objects.create(path="seo.csv", group_by="")
+
+    response = get_rules(client, authorization=f"Bearer {TOKEN}")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {"path": "reports/sales.csv", "group_by": "category"},
+        {"path": "seo.csv", "group_by": ""},
+    ]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "header", [None, "Bearer wrong", f"Basic {TOKEN}", TOKEN, "Bearer "]
+)
+def test_rules_api_refuses_without_the_token(client, pipeline_on, header):
+    headers = {"authorization": header} if header is not None else {}
+
+    response = get_rules(client, **headers)
+
+    assert response.status_code == 401
+    assert response["WWW-Authenticate"] == "Bearer"
+
+
+@pytest.mark.django_db
+def test_rules_api_is_off_without_a_token_setting(client, settings):
+    settings.PIPELINE_API_TOKEN = ""
+
+    assert get_rules(client, authorization="Bearer ").status_code == 404
+
+
+@pytest.mark.django_db
+def test_table_file_rules_are_shown_when_processing_is_on(user_client, pipeline_on):
     page = user_client.get(reverse("files:browse")).content.decode()
 
     assert 'data-testid="table-rules"' in page
+    assert 'data-testid="group-by"' in page
     assert "<code>.xlsx</code>" in page
 
 
 @pytest.mark.django_db
 def test_table_file_rules_are_hidden_without_processing(user_client, settings):
-    settings.AIRFLOW_API_URL = ""
+    settings.PIPELINE_API_TOKEN = ""
 
     page = user_client.get(reverse("files:browse")).content.decode()
 
     assert 'data-testid="table-rules"' not in page
+    assert 'data-testid="group-by"' not in page

@@ -37,6 +37,11 @@
       <input type="hidden" name="path" value="{{ path }}">
       <label for="id_files">Upload files</label>
       <input type="file" id="id_files" name="files" multiple required data-testid="file-input">
+      {% if table_formats %}
+        <label for="id_group_by">Group by column</label>
+        <input type="text" id="id_group_by" name="group_by" maxlength="255"
+               placeholder="first text column" data-testid="group-by">
+      {% endif %}
       <button type="submit" data-testid="upload">Upload</button>
     </form>
   </div>
@@ -49,13 +54,16 @@
     <details class="hint" data-testid="table-rules">
       <summary>
         Table files ({% for ext in table_formats %}<code>{{ ext }}</code>{% if not forloop.last %}, {% endif %}{% endfor %})
-        are grouped by a column after upload. How to prepare one
+        are grouped by a column within a minute after upload. How to prepare one
       </summary>
       <ul>
         <li>The first row holds the column names: short, in Latin letters, no spaces
           (<code>category</code>, not <code>Product category</code>).</li>
-        <li>Rows are grouped by the first column, so put there a value that repeats:
+        <li>Rows are grouped by the column named in <em>Group by column</em>.
+          Left empty, it is the first text column, so put there a value that repeats:
           a category, a city, a status.</li>
+        <li>To group a file by another column, delete it and upload it again
+          with the new column name.</li>
         <li>Every row has as many values as there are columns.</li>
         <li>CSV: comma between values, UTF-8 encoding, a value with a comma inside
           goes in quotes (<code>"Lego, big set"</code>), decimals with a dot (<code>12.5</code>).

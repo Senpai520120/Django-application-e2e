@@ -147,13 +147,12 @@ environment variables win over the file, so CI and docker need no `.env` at all.
 | `AWS_S3_ENDPOINT_URL` | empty | S3 emulator address for local checks |
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | empty | left unset on EC2, where the IAM role works |
 | `CSRF_TRUSTED_ORIGINS` | empty | needed behind an HTTPS proxy |
-| `AIRFLOW_API_URL` | empty | Airflow address; empty means uploads are not processed |
-| `AIRFLOW_USERNAME` / `AIRFLOW_PASSWORD` | `django` in the compose file / required | the Airflow user the app triggers runs as; the password is yours to choose |
+| `PIPELINE_API_TOKEN` | empty | shared by the app and Airflow, which reads the grouping rules with it; empty means uploads are not grouped |
 | `AIRFLOW_ADMIN_PASSWORD` | required | password of `admin` in the Airflow UI; Airflow does not start without it |
 | `AIRFLOW_AWS_ACCESS_KEY_ID` / `AIRFLOW_AWS_SECRET_ACCESS_KEY` | empty | read-only keys for Airflow in S3 mode; empty means the instance role |
 
-Make the Airflow passwords with
-`python -c "import secrets;print(secrets.token_urlsafe(16))"`, one per variable.
+Make `PIPELINE_API_TOKEN` and `AIRFLOW_ADMIN_PASSWORD` with
+`python -c "import secrets; print(secrets.token_urlsafe(32))"`, one per variable.
 
 The `*_SECURE` flags are off by default: over plain local HTTP the browser drops
 a secure cookie and login stops working. Turn them on before going to HTTPS and
@@ -295,18 +294,24 @@ docker compose --profile s3 up --build
 Every line above is covered by tests: `tests/test_files_paths.py`,
 `tests/test_files_storage.py`, `tests/test_files_views.py`.
 
-### Processing uploaded tables in Airflow
+### Grouping uploaded tables in Airflow
 
 A `.csv`, `.xlsx`, `.json` or `.parquet` file uploaded through the file manager
-is grouped by one of its columns, and the result lands in DuckDB. The upload itself stays fast: the app
-only asks Airflow to start a run and does no processing in the request.
+is grouped by one of its columns, and the result lands in DuckDB. The app never
+calls Airflow: Airflow watches the uploads itself and asks the app only which
+column each file is grouped by.
 
 ```
-Upload form -> UploadView saves the file -> files/pipeline.py
-    -> POST /api/v2/dags/process_upload/dagRuns {"conf": {"path": "..."}}
-Airflow, DAG process_upload (airflow/dags/process_upload.py):
-    locate          the file (shared volume or bucket), the column to group by
-    group_and_save  GROUP BY that column -> table upload_groups in DuckDB
+Upload form (files + "Group by column")
+    -> UploadView: GroupingRule(path, group_by) in Postgres, then the file
+Airflow, DAG watch_uploads (airflow/dags/watch_uploads.py), always running:
+    new_uploads   sensor, every 30 s:
+                    files in the store (DuckDB read_blob: folder or bucket)
+                  + GET /files/api/grouping-rules/  (Bearer PIPELINE_API_TOKEN)
+                  - what processed_files in DuckDB already has
+                  = new files, changed files, files with a new column
+    group_file    one mapped task per file, one at a time:
+                    GROUP BY the column -> upload_groups, mark in processed_files
 ```
 
 ```bash
@@ -314,11 +319,35 @@ docker compose -f docker-compose.yml -f docker-compose.airflow.yml up -d --build
 ```
 
 * Airflow UI: http://localhost:8081 (`admin`, password from
-  `AIRFLOW_ADMIN_PASSWORD`); the app triggers runs as `AIRFLOW_USERNAME`
-  (`django`, password `AIRFLOW_PASSWORD`), a user that may run DAGs but not change Airflow's settings.
+  `AIRFLOW_ADMIN_PASSWORD`). `watch_uploads` has one run in the `running`
+  state almost all the time: that is the sensor waiting. Each file it finds
+  shows up as a `group_file` task of that run, within about 30 seconds of the
+  upload.
+* The run is `@continuous`: when it ends, the next starts at once. After an
+  hour with nothing new the sensor gives up as `skipped` (not failed), the run
+  ends and a fresh one takes over, so the history does not grow every 30 s.
+* The column comes from the upload form and is kept in the app's database
+  (`files.models.GroupingRule`). Empty means the file's first text (`VARCHAR`)
+  column, or the first column if there is no text one. To group a file by
+  another column, delete it and upload it again with the new column: the
+  storage never overwrites a file. Renaming or deleting a file or a folder
+  takes its rules along.
+* The rules API, `GET /files/api/grouping-rules/`, answers
+  `[{"path": ..., "group_by": ...}]` only to `Authorization: Bearer
+  <PIPELINE_API_TOKEN>`; without the token it is 401, and with no
+  `PIPELINE_API_TOKEN` set it does not exist (404) and uploads are only saved.
+  The same token is set for the app and for Airflow in
+  `docker-compose.airflow.yml`; Airflow reaches the app at `http://web:8000`.
+* `processed_files` in DuckDB is the sensor's memory: one row per file with its
+  modification time, the rule's column and `done` or `failed`. A file is taken
+  again only when one of those changes. A file that cannot be grouped (no such
+  column, a broken file) is marked `failed` with the error, its task goes red
+  once, and it is not retried until it is uploaded again.
+* The app down or a wrong token: the sensor task fails and is retried twice,
+  then the run fails and `@continuous` starts a new one.
 * Airflow reads the files where the app keeps them. With local storage it is
   the very `filestore` volume, mounted read-only. With `FILE_STORAGE_BACKEND=s3`
-  it is the bucket: DuckDB reads `s3://<bucket>/<FILE_MANAGER_S3_LOCATION>/...`
+  it is the bucket: DuckDB lists and reads `s3://<bucket>/<FILE_MANAGER_S3_LOCATION>/...`
   through its httpfs extension. The bucket settings are the same `AWS_*` values
   from `.env` as the app's, the keys are not: Airflow takes
   `AIRFLOW_AWS_ACCESS_KEY_ID` / `AIRFLOW_AWS_SECRET_ACCESS_KEY`, or the instance
@@ -331,6 +360,12 @@ docker compose -f docker-compose.yml -f docker-compose.airflow.yml up -d --build
     "Statement": [
       {
         "Effect": "Allow",
+        "Action": "s3:ListBucket",
+        "Resource": "arn:aws:s3:::<bucket>",
+        "Condition": {"StringLike": {"s3:prefix": "filemanager/*"}}
+      },
+      {
+        "Effect": "Allow",
         "Action": "s3:GetObject",
         "Resource": "arn:aws:s3:::<bucket>/filemanager/*"
       }
@@ -338,41 +373,34 @@ docker compose -f docker-compose.yml -f docker-compose.airflow.yml up -d --build
   }
   ```
 
-  No `ListBucket`, no `PutObject` or `DeleteObject`: DuckDB reads one known
-  object. `filemanager` here is `FILE_MANAGER_S3_LOCATION`; change both
-  together. In S3 mode with localstack:
+  `ListBucket` is for the sensor, which looks for new files, and only under the
+  prefix; no `PutObject` or `DeleteObject`. `filemanager` here is
+  `FILE_MANAGER_S3_LOCATION`; change both together. In S3 mode with localstack:
 
   ```bash
   docker compose -f docker-compose.yml -f docker-compose.airflow.yml --profile s3 up -d --build
   # additionally in .env: the S3 mode values from the section above
   ```
-* The column is `group_by` from the run's parameters. When it is empty, it is
-  the file's first text (`VARCHAR`) column, or the first column if there is no
-  text one. The app never sets `group_by`; a run started by hand from the UI can.
-* Both Airflow users get their passwords from `.env`: the container writes
-  them into its passwords file at start and does not start without them.
+* `PIPELINE_API_TOKEN` and `AIRFLOW_ADMIN_PASSWORD` come from `.env`; the
+  Airflow container does not start without them.
 * Table `upload_groups`: `source` (the file's path), `group_column`,
   `group_value`, `row_count`, `processed_at`. A file processed again replaces
   its own rows, so nothing is counted twice.
-* Airflow down or not answering: the file is still saved, and the user sees one
-  warning. One token is taken per upload, with a short timeout (2 s to connect,
-  5 s to read); after the first failure Airflow is not tried again for that
-  upload, so a down Airflow cannot stall it. Without `AIRFLOW_API_URL` nothing
-  is sent at all.
 
 Looking at the result:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.airflow.yml exec airflow   python -c "import duckdb; print(duckdb.connect('/data/analytics/analytics.duckdb', read_only=True).sql('select * from upload_groups'))"
+docker compose -f docker-compose.yml -f docker-compose.airflow.yml exec airflow   python -c "import duckdb; c = duckdb.connect('/data/analytics/analytics.duckdb', read_only=True); print(c.sql('select * from upload_groups')); print(c.sql('select * from processed_files'))"
 ```
 
-Tests: `tests/test_files_pipeline.py` (the requests to Airflow),
-`tests/test_files_views.py` (which uploads are sent),
-`tests/test_upload_groups.py` (the grouping on a real DuckDB file, from disk
-and from a real S3 endpoint served by moto). CI also has a job,
-`airflow-dags`, that starts the airflow service and checks that
-`airflow dags list-import-errors` is empty and `process_upload` is listed.
-The live chain upload -> Airflow -> DuckDB is not run in CI.
+Tests: `tests/test_files_pipeline.py` (which uploads are grouped),
+`tests/test_files_views.py` (rules saved with an upload, moved and deleted
+with the file, the rules API and its token),
+`tests/test_upload_groups.py` (listing the store, choosing what is new, the
+grouping on a real DuckDB file, from disk and from a real S3 endpoint served
+by moto). CI also has a job, `airflow-dags`, that starts the airflow service
+and checks that `airflow dags list-import-errors` is empty and `watch_uploads`
+is listed. The live chain upload -> Airflow -> DuckDB is not run in CI.
 
 ## Tests
 
@@ -879,8 +907,9 @@ files/            the file manager at /files/
   storage.py        the storage contract plus local and s3
   access.py         who gets into the section
   views.py          listing, upload, rename, delete, download
-  pipeline.py       starting the Airflow processing of an uploaded table file
-airflow/          the Airflow image and the process_upload DAG
+  models.py         GroupingRule: the column each table file is grouped by
+  pipeline.py       which uploads are grouped in Airflow
+airflow/          the Airflow image and the watch_uploads DAG
 e2e/              pytest + Playwright: scenarios in a browser
 deploy/aws/       Terraform: S3, IAM role, EC2
 templates/        base.html, registration/login.html, the panel, 403/404/500
@@ -918,8 +947,8 @@ tests/            pytest-django
   gone when the container is recreated; the results in DuckDB stay.
 * Airflow exists only locally (`docker-compose.airflow.yml`). The AWS stand does
   not run it: the instance is a t3.micro with 1 GB of RAM, and Airflow in
-  `standalone` mode needs more. There `AIRFLOW_API_URL` is empty, so uploads are
-  saved and not processed.
+  `standalone` mode needs more. There `PIPELINE_API_TOKEN` is empty, so uploads are
+  saved and not grouped.
 * Renaming or deleting a file does not remove its rows from `upload_groups` in
   DuckDB.
 * A table file is read twice: once for the schema (to pick the column), once for
