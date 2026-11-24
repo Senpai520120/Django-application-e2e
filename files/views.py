@@ -25,7 +25,13 @@ from files.access import FileManagerAccessMixin
 from files.forms import FolderForm, RenameForm, UploadForm
 from files.models import GroupingRule
 from files.paths import breadcrumbs, join_path, normalize_path, parent_path
-from files.pipeline import TABLE_FORMATS, processing_enabled, should_process
+from files.pipeline import (
+    AGGREGATIONS,
+    TABLE_FORMATS,
+    describe_aggregations,
+    processing_enabled,
+    should_process,
+)
 from files.storage import StorageError, get_storage
 from files.uploads import oversized_uploads
 
@@ -45,14 +51,19 @@ def delete_rules(path: str) -> None:
     GroupingRule.objects.filter(path__startswith=f"{path}/").delete()
 
 
-def grouping_message(name: str, group_by: str) -> str:
-    if group_by:
-        return _("%(name)s will be grouped by %(column)s within a minute.") % {
+def grouping_message(name: str, group_by: str, aggregations: list[dict]) -> str:
+    column = group_by or _("its first text column")
+    if aggregations:
+        return _(
+            "%(name)s will be grouped by %(column)s with %(math)s within a minute."
+        ) % {
             "name": name,
-            "column": group_by,
+            "column": column,
+            "math": describe_aggregations(aggregations),
         }
-    return _("%(name)s will be grouped by its first text column within a minute.") % {
-        "name": name
+    return _("%(name)s will be grouped by %(column)s within a minute.") % {
+        "name": name,
+        "column": column,
     }
 
 
@@ -99,6 +110,7 @@ class BrowseView(FileManagerMixin, TemplateView):
             backend=self.storage.__class__.__name__,
             max_file_size=filesizeformat(settings.FILE_MANAGER["MAX_FILE_SIZE"]),
             table_formats=TABLE_FORMATS if processing_enabled() else (),
+            aggregation_ops=AGGREGATIONS,
         )
         return context
 
@@ -152,6 +164,7 @@ class UploadView(FileManagerMixin, FormView):
             return self.redirect_to(path)
 
         group_by = form.cleaned_data["group_by"]
+        aggregations = form.cleaned_data["aggregations"]
         saved = 0
         for item in uploaded:
             # The name the storage would give the file anyway ("my sales.csv"
@@ -164,7 +177,8 @@ class UploadView(FileManagerMixin, FormView):
             ruled = should_process(name) and not self.storage.exists(target)
             if ruled:
                 GroupingRule.objects.update_or_create(
-                    path=target, defaults={"group_by": group_by}
+                    path=target,
+                    defaults={"group_by": group_by, "aggregations": aggregations},
                 )
             try:
                 stored = self.storage.save(target, item)
@@ -180,7 +194,9 @@ class UploadView(FileManagerMixin, FormView):
             if ruled:
                 if stored != target:
                     move_rules(target, stored)
-                messages.info(self.request, grouping_message(name, group_by))
+                messages.info(
+                    self.request, grouping_message(name, group_by, aggregations)
+                )
 
         if saved:
             messages.success(
@@ -305,5 +321,5 @@ class GroupingRulesView(View):
                 status=401,
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        rules = list(GroupingRule.objects.values("path", "group_by"))
+        rules = list(GroupingRule.objects.values("path", "group_by", "aggregations"))
         return JsonResponse(rules, safe=False)

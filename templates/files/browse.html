@@ -41,6 +41,9 @@
         <label for="id_group_by">Group by column</label>
         <input type="text" id="id_group_by" name="group_by" maxlength="255"
                placeholder="first text column" data-testid="group-by">
+        <label for="id_aggregations">Aggregations</label>
+        <input type="text" id="id_aggregations" name="aggregations" maxlength="1000"
+               placeholder="sum(clicks), avg(impressions)" data-testid="aggregations">
       {% endif %}
       <button type="submit" data-testid="upload">Upload</button>
     </form>
@@ -62,8 +65,12 @@
         <li>Rows are grouped by the column named in <em>Group by column</em>.
           Left empty, it is the first text column, so put there a value that repeats:
           a category, a city, a status.</li>
-        <li>To group a file by another column, delete it and upload it again
-          with the new column name.</li>
+        <li><em>Aggregations</em> adds math per group, comma-separated:
+          {% for op in aggregation_ops %}<code>{{ op }}(column)</code>{% if not forloop.last %}, {% endif %}{% endfor %}.
+          <code>count</code> works on any column, the others on numbers only.
+          Example: <code>sum(clicks), avg(impressions)</code>.</li>
+        <li>To group a file by another column or with other math, delete it and
+          upload it again.</li>
         <li>Every row has as many values as there are columns.</li>
         <li>CSV: comma between values, UTF-8 encoding, a value with a comma inside
           goes in quotes (<code>"Lego, big set"</code>), decimals with a dot (<code>12.5</code>).

@@ -10,6 +10,8 @@ import pytest
 from moto.server import ThreadedMotoServer
 from upload_groups import (
     UploadError,
+    aggregations_key,
+    check_aggregations,
     fetch_rules,
     file_columns,
     file_schema,
@@ -261,42 +263,86 @@ def test_files_in_s3_are_listed(bucket):
     assert list(files) == ["reports/sales.csv"]
 
 
+def rule(group_by="", aggregations=()):
+    return {"group_by": group_by, "aggregations": list(aggregations)}
+
+
+SUM_CLICKS = {"op": "sum", "column": "clicks"}
+
+
 def test_pending_takes_only_what_changed():
-    files = {"new.csv": 5, "same.csv": 5, "again.csv": 9, "column.csv": 5}
-    rules = {"same.csv": "city", "again.csv": "", "column.csv": "country"}
+    files = {
+        "new.csv": 5,
+        "same.csv": 5,
+        "again.csv": 9,
+        "column.csv": 5,
+        "math.csv": 5,
+    }
+    rules = {
+        "same.csv": rule("city", [SUM_CLICKS]),
+        "again.csv": rule(),
+        "column.csv": rule("country"),
+        "math.csv": rule("city", [SUM_CLICKS]),
+    }
     processed = {
-        "same.csv": (5, "city"),
-        "again.csv": (5, ""),
-        "column.csv": (5, "device"),
-        "deleted.csv": (5, ""),
+        "same.csv": (5, "city", aggregations_key([SUM_CLICKS])),
+        "again.csv": (5, "", "[]"),
+        "column.csv": (5, "device", "[]"),
+        "math.csv": (5, "city", "[]"),
+        "deleted.csv": (5, "", "[]"),
     }
 
     todo = pending(files, rules, processed)
 
     assert todo == [
-        {"path": "again.csv", "mtime_ms": 9, "group_by": ""},
-        {"path": "column.csv", "mtime_ms": 5, "group_by": "country"},
-        {"path": "new.csv", "mtime_ms": 5, "group_by": ""},
+        {"path": "again.csv", "mtime_ms": 9, "group_by": "", "aggregations": []},
+        {
+            "path": "column.csv",
+            "mtime_ms": 5,
+            "group_by": "country",
+            "aggregations": [],
+        },
+        {
+            "path": "math.csv",
+            "mtime_ms": 5,
+            "group_by": "city",
+            "aggregations": [SUM_CLICKS],
+        },
+        {"path": "new.csv", "mtime_ms": 5, "group_by": "", "aggregations": []},
     ]
 
 
 def test_saved_file_is_marked_done(store, tmp_path):
     db = tmp_path / "a.duckdb"
     path = resolve_upload(store, "reports/sales.csv")
+    asked = [{"op": "sum", "column": "amount"}]
 
-    save_groups(db, path, "reports/sales.csv", "category", mtime_ms=7, group_by="")
+    save_groups(
+        db,
+        path,
+        "reports/sales.csv",
+        "category",
+        mtime_ms=7,
+        group_by="",
+        aggregations=asked,
+    )
 
     done = processed_files(db)
-    assert done == {"reports/sales.csv": (7, "")}
-    assert pending({"reports/sales.csv": 7}, {}, done) == []
+    assert done == {"reports/sales.csv": (7, "", aggregations_key(asked))}
+    assert (
+        pending({"reports/sales.csv": 7}, {"reports/sales.csv": rule("", asked)}, done)
+        == []
+    )
 
 
 def test_failed_file_is_not_taken_again(tmp_path):
     db = tmp_path / "a.duckdb"
 
-    mark_failed(db, "seo.csv", 3, "price", "No column 'price'")
+    mark_failed(db, "seo.csv", 3, "price", [], "No column 'price'")
 
-    assert pending({"seo.csv": 3}, {"seo.csv": "price"}, processed_files(db)) == []
+    assert (
+        pending({"seo.csv": 3}, {"seo.csv": rule("price")}, processed_files(db)) == []
+    )
     with duckdb.connect(str(db)) as con:
         assert con.execute("SELECT status, error FROM processed_files").fetchall() == [
             ("failed", "No column 'price'")
@@ -307,6 +353,26 @@ def test_fresh_database_has_nothing_processed(tmp_path):
     assert processed_files(tmp_path / "a.duckdb") == {}
 
 
+def test_database_from_before_aggregations_is_upgraded(tmp_path):
+    db = tmp_path / "a.duckdb"
+    with duckdb.connect(str(db)) as con:
+        con.execute(
+            "CREATE TABLE processed_files (source VARCHAR PRIMARY KEY,"
+            " mtime_ms BIGINT NOT NULL, group_by VARCHAR NOT NULL,"
+            " status VARCHAR NOT NULL, error VARCHAR,"
+            " processed_at TIMESTAMP NOT NULL DEFAULT current_timestamp)"
+        )
+        con.execute(
+            "INSERT INTO processed_files VALUES ('a.csv', 5, '', 'done', NULL, now())"
+        )
+
+    done = processed_files(db)
+
+    # Done with no aggregations, so not taken again.
+    assert done == {"a.csv": (5, "", "[]")}
+    assert pending({"a.csv": 5}, {"a.csv": rule()}, done) == []
+
+
 def test_rules_are_fetched_with_the_token(monkeypatch):
     seen = {}
 
@@ -314,7 +380,7 @@ def test_rules_are_fetched_with_the_token(monkeypatch):
         seen["auth"] = request.get_header("Authorization")
         seen["timeout"] = timeout
         body = [
-            {"path": "seo.csv", "group_by": "device"},
+            {"path": "seo.csv", "group_by": "device", "aggregations": [SUM_CLICKS]},
             {"path": "a.csv", "group_by": ""},
         ]
         return io.BytesIO(json.dumps(body).encode())
@@ -323,5 +389,106 @@ def test_rules_are_fetched_with_the_token(monkeypatch):
 
     rules = fetch_rules("http://web:8000/files/api/grouping-rules/", "tok")
 
-    assert rules == {"seo.csv": "device", "a.csv": ""}
+    assert rules == {"seo.csv": rule("device", [SUM_CLICKS]), "a.csv": rule()}
     assert seen == {"auth": "Bearer tok", "timeout": 5}
+
+
+ORDERS = "city,amount,qty,note\nKyiv,10.5,1,a\nLviv,4,2,\nKyiv,5,3,b\n"
+
+
+@pytest.fixture
+def orders(tmp_path):
+    csv = tmp_path / "orders.csv"
+    csv.write_text(ORDERS)
+    return csv
+
+
+def aggregates(db_path):
+    with duckdb.connect(str(db_path)) as con:
+        return con.execute(
+            "SELECT group_value, op, value_column, value FROM upload_aggregates"
+            " ORDER BY group_value, op, value_column"
+        ).fetchall()
+
+
+def test_aggregations_are_computed_per_group(orders, tmp_path):
+    db = tmp_path / "a.duckdb"
+    asked = check_aggregations(
+        file_schema(orders),
+        [
+            {"op": "sum", "column": "amount"},
+            {"op": "avg", "column": "qty"},
+            {"op": "min", "column": "amount"},
+            {"op": "max", "column": "qty"},
+            {"op": "count", "column": "note"},
+        ],
+    )
+
+    save_groups(db, orders, "orders.csv", "city", **MARK, aggregations=asked)
+
+    assert aggregates(db) == [
+        ("Kyiv", "avg", "qty", 2.0),
+        ("Kyiv", "count", "note", 2.0),
+        ("Kyiv", "max", "qty", 3.0),
+        ("Kyiv", "min", "amount", 5.0),
+        ("Kyiv", "sum", "amount", 15.5),
+        ("Lviv", "avg", "qty", 2.0),
+        # count skips empty values, like SQL's count(column).
+        ("Lviv", "count", "note", 0.0),
+        ("Lviv", "max", "qty", 2.0),
+        ("Lviv", "min", "amount", 4.0),
+        ("Lviv", "sum", "amount", 4.0),
+    ]
+
+
+def test_new_aggregations_replace_the_old_ones(orders, tmp_path):
+    db = tmp_path / "a.duckdb"
+    schema = file_schema(orders)
+    first = check_aggregations(schema, [{"op": "sum", "column": "amount"}])
+    second = check_aggregations(schema, [{"op": "max", "column": "qty"}])
+
+    save_groups(db, orders, "orders.csv", "city", **MARK, aggregations=first)
+    save_groups(db, orders, "orders.csv", "city", **MARK, aggregations=second)
+
+    assert [row[1] for row in aggregates(db)] == ["max", "max"]
+
+
+def test_no_aggregations_leave_no_rows(orders, tmp_path):
+    db = tmp_path / "a.duckdb"
+
+    save_groups(db, orders, "orders.csv", "city", **MARK)
+
+    assert aggregates(db) == []
+
+
+@pytest.mark.parametrize(
+    ("asked", "message"),
+    [
+        ({"op": "sum", "column": "price"}, "No column 'price'"),
+        ({"op": "sum", "column": "city"}, "not a number"),
+        ({"op": "median", "column": "qty"}, "Unknown aggregation"),
+        ({"op": "sum); DROP TABLE x; --", "column": "qty"}, "Unknown aggregation"),
+    ],
+)
+def test_bad_aggregations_are_refused(orders, asked, message):
+    with pytest.raises(UploadError, match=message):
+        check_aggregations(file_schema(orders), [asked])
+
+
+def test_count_takes_any_column(orders):
+    asked = [{"op": "count", "column": "city"}]
+
+    assert check_aggregations(file_schema(orders), asked) == asked
+
+
+def test_column_names_are_quoted(tmp_path):
+    csv = tmp_path / "odd.csv"
+    csv.write_text('kind,"total ""net"""\na,1\na,2\n')
+    db = tmp_path / "a.duckdb"
+    asked = check_aggregations(
+        file_schema(csv), [{"op": "sum", "column": 'total "net"'}]
+    )
+
+    save_groups(db, csv, "odd.csv", "kind", **MARK, aggregations=asked)
+
+    assert aggregates(db) == [("a", "sum", 'total "net"', 3.0)]

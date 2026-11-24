@@ -15,6 +15,7 @@ import duckdb
 from airflow.sdk import PokeReturnValue, dag, task
 from upload_groups import (
     UploadError,
+    check_aggregations,
     fetch_rules,
     file_schema,
     filestore_root,
@@ -62,9 +63,12 @@ def watch_uploads():
     @task(max_active_tis_per_dagrun=1, retries=0)
     def group_file(item: dict) -> int:
         source, mtime_ms, group_by = item["path"], item["mtime_ms"], item["group_by"]
+        aggregations = item.get("aggregations", [])
         try:
             path = resolve_upload(filestore_root(os.environ), source)
-            column = pick_group_column(file_schema(path), group_by or None)
+            schema = file_schema(path)
+            column = pick_group_column(schema, group_by or None)
+            checked = check_aggregations(schema, aggregations)
             return save_groups(
                 DUCKDB_PATH,
                 # A string, not a Path: Path would fold the // of s3://.
@@ -73,12 +77,15 @@ def watch_uploads():
                 column,
                 mtime_ms=mtime_ms,
                 group_by=group_by,
+                aggregations=checked,
             )
         except (UploadError, duckdb.Error) as error:
             # A missing column or a broken file will not mend by itself: the
             # file is marked failed and waits for a new upload. The task still
             # goes red, so the failure shows in the UI.
-            mark_failed(DUCKDB_PATH, source, mtime_ms, group_by, str(error))
+            mark_failed(
+                DUCKDB_PATH, source, mtime_ms, group_by, aggregations, str(error)
+            )
             raise UploadError(f"{source}: {error}") from error
 
     group_file.expand(item=new_uploads())

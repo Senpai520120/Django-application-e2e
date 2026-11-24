@@ -470,8 +470,8 @@ def test_rules_api_gives_every_rule_to_the_right_token(client, pipeline_on):
 
     assert response.status_code == 200
     assert response.json() == [
-        {"path": "reports/sales.csv", "group_by": "category"},
-        {"path": "seo.csv", "group_by": ""},
+        {"path": "reports/sales.csv", "group_by": "category", "aggregations": []},
+        {"path": "seo.csv", "group_by": "", "aggregations": []},
     ]
 
 
@@ -512,3 +512,97 @@ def test_table_file_rules_are_hidden_without_processing(user_client, settings):
 
     assert 'data-testid="table-rules"' not in page
     assert 'data-testid="group-by"' not in page
+
+
+def upload_with_math(client, math, name="seo.csv", group_by="device"):
+    return client.post(
+        reverse("files:upload"),
+        {
+            "path": "",
+            "files": SimpleUploadedFile(name, b"x"),
+            "group_by": group_by,
+            "aggregations": math,
+        },
+        follow=True,
+    )
+
+
+@pytest.mark.django_db
+def test_upload_saves_the_aggregations(user_client, pipeline_on):
+    response = upload_with_math(user_client, " SUM(clicks) , avg( impressions ),")
+
+    rule = GroupingRule.objects.get(path="seo.csv")
+    assert rule.aggregations == [
+        {"op": "sum", "column": "clicks"},
+        {"op": "avg", "column": "impressions"},
+    ]
+    assert "with sum(clicks), avg(impressions) within a minute" in (
+        response.content.decode()
+    )
+
+
+@pytest.mark.django_db
+def test_repeated_aggregation_is_kept_once(user_client, pipeline_on):
+    upload_with_math(user_client, "max(clicks), max(clicks)")
+
+    assert GroupingRule.objects.get().aggregations == [
+        {"op": "max", "column": "clicks"}
+    ]
+
+
+@pytest.mark.django_db
+def test_column_name_with_spaces_is_allowed(user_client, pipeline_on):
+    upload_with_math(user_client, "sum(net total)")
+
+    assert GroupingRule.objects.get().aggregations == [
+        {"op": "sum", "column": "net total"}
+    ]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "math",
+    [
+        "median(clicks)",
+        "sum clicks",
+        "sum()",
+        "sum(a(b))",
+        'sum("x"); DROP TABLE upload_groups; --)',
+        ", ".join(f"sum(c{number})" for number in range(11)),
+    ],
+)
+def test_bad_aggregations_refuse_the_upload(user_client, pipeline_on, file_root, math):
+    response = upload_with_math(user_client, math)
+
+    assert GroupingRule.objects.count() == 0
+    assert not (file_root / "seo.csv").exists()
+    errors = [m for m in response.context["messages"] if m.level_tag == "error"]
+    assert errors
+
+
+@pytest.mark.django_db
+def test_rules_api_gives_the_aggregations(client, pipeline_on):
+    GroupingRule.objects.create(
+        path="seo.csv",
+        group_by="device",
+        aggregations=[{"op": "sum", "column": "clicks"}],
+    )
+
+    response = get_rules(client, authorization=f"Bearer {TOKEN}")
+
+    assert response.json() == [
+        {
+            "path": "seo.csv",
+            "group_by": "device",
+            "aggregations": [{"op": "sum", "column": "clicks"}],
+        }
+    ]
+
+
+@pytest.mark.django_db
+def test_aggregations_field_is_shown_with_processing(user_client, pipeline_on):
+    page = user_client.get(reverse("files:browse")).content.decode()
+
+    assert 'data-testid="aggregations"' in page
+    assert "<code>median" not in page
+    assert "<code>avg(column)</code>" in page

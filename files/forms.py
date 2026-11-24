@@ -4,6 +4,8 @@ Names arrive from the user, so every form runs them through `files.paths` —
 the single place that decides what is allowed.
 """
 
+import re
+
 from django import forms
 from django.conf import settings
 from django.core.exceptions import SuspiciousFileOperation
@@ -11,6 +13,10 @@ from django.template.defaultfilters import filesizeformat
 from django.utils.translation import gettext_lazy as _
 
 from files.paths import MAX_NAME_LENGTH, clean_name, normalize_path
+from files.pipeline import AGGREGATIONS, MAX_AGGREGATIONS
+
+# One "op(column)"; a column name may hold spaces, not brackets or commas.
+AGGREGATION = re.compile(r"^(?P<op>[A-Za-z]+)\(\s*(?P<column>[^(),]+?)\s*\)$")
 
 
 class PathField(forms.CharField):
@@ -64,6 +70,39 @@ class MultipleFileField(forms.FileField):
         return [clean_single(data, initial)]
 
 
+class AggregationsField(forms.CharField):
+    """ "sum(clicks), avg(impressions)" -> [{"op": "sum", "column": "clicks"}, ...].
+
+    Only the ops from the allowed list get through, so nothing typed here
+    ever reaches DuckDB as SQL.
+    """
+
+    def __init__(self, **kwargs):
+        kwargs.setdefault("max_length", 1000)
+        kwargs.setdefault("required", False)
+        super().__init__(**kwargs)
+
+    def clean(self, value):
+        value = super().clean(value)
+        result = []
+        for part in filter(None, (piece.strip() for piece in value.split(","))):
+            match = AGGREGATION.match(part)
+            op = match and match["op"].lower()
+            if not match or op not in AGGREGATIONS:
+                raise forms.ValidationError(
+                    _("%(part)s: write it as op(column), op one of %(ops)s.")
+                    % {"part": part, "ops": ", ".join(AGGREGATIONS)}
+                )
+            item = {"op": op, "column": match["column"]}
+            if item not in result:
+                result.append(item)
+        if len(result) > MAX_AGGREGATIONS:
+            raise forms.ValidationError(
+                _("At most %(count)s aggregations.") % {"count": MAX_AGGREGATIONS}
+            )
+        return result
+
+
 class FolderForm(forms.Form):
     path = PathField()
     name = NameField(label=_("Folder name"))
@@ -84,6 +123,8 @@ class UploadForm(forms.Form):
     group_by = forms.CharField(
         label=_("Group by column"), max_length=255, required=False, strip=True
     )
+    # Math per group for the same files, e.g. "sum(clicks), avg(impressions)".
+    aggregations = AggregationsField(label=_("Aggregations"))
 
     def __init__(self, *args, oversized=(), **kwargs):
         super().__init__(*args, **kwargs)

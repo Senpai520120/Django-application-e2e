@@ -1,4 +1,5 @@
-"""Finding new uploaded table files and grouping them by one column into DuckDB.
+"""Finding new uploaded table files, grouping them by one column into DuckDB
+and computing the asked-for math (sum, avg, ...) per group.
 
 Plain functions with no Airflow import: the DAG calls them, and the app's
 tests run them against a real DuckDB file without an Airflow install.
@@ -9,7 +10,7 @@ from __future__ import annotations
 import json
 import os
 import urllib.request
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
@@ -38,8 +39,38 @@ CREATE_TABLE = f"""
 """
 
 
+# Math per group asked for in the app: op -> DuckDB function. Keep in step
+# with AGGREGATIONS in files/pipeline.py. Only these names ever reach SQL.
+AGGREGATES = {"sum": "sum", "avg": "avg", "min": "min", "max": "max", "count": "count"}
+
+# The ops that need numbers; count takes any column.
+NUMERIC_ONLY = {"sum", "avg", "min", "max"}
+
+NUMERIC_TYPES = {
+    "TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT",
+    "UTINYINT", "USMALLINT", "UINTEGER", "UBIGINT", "UHUGEINT",
+    "FLOAT", "DOUBLE",
+}  # fmt: skip
+
+# One row per group and op: the set of ops differs from file to file, and a
+# long table keeps one schema for all of them.
+AGGREGATES_TABLE = "upload_aggregates"
+
+CREATE_AGGREGATES = f"""
+    CREATE TABLE IF NOT EXISTS {AGGREGATES_TABLE} (
+        source       VARCHAR NOT NULL,
+        group_column VARCHAR NOT NULL,
+        group_value  VARCHAR,
+        op           VARCHAR NOT NULL,
+        value_column VARCHAR NOT NULL,
+        value        DOUBLE,
+        processed_at TIMESTAMP NOT NULL DEFAULT current_timestamp
+    )
+"""
+
 # What is already done, so the sensor never takes a file twice. A row is one
-# version of a file (its modification time) grouped by one rule's column.
+# version of a file (its modification time) processed by one rule: its
+# column and its aggregations.
 PROCESSED = "processed_files"
 
 CREATE_PROCESSED = f"""
@@ -47,10 +78,20 @@ CREATE_PROCESSED = f"""
         source       VARCHAR PRIMARY KEY,
         mtime_ms     BIGINT NOT NULL,
         group_by     VARCHAR NOT NULL,
+        aggregations VARCHAR NOT NULL DEFAULT '[]',
         status       VARCHAR NOT NULL,
         error        VARCHAR,
         processed_at TIMESTAMP NOT NULL DEFAULT current_timestamp
     )
+"""
+
+# A database made before aggregations existed lacks the column; '[]' is
+# what those files were processed with, so they are not taken again. No NOT
+# NULL here: DuckDB cannot add one with IF NOT EXISTS, and the default fills
+# the old rows anyway.
+ADD_AGGREGATIONS_COLUMN = f"""
+    ALTER TABLE {PROCESSED}
+    ADD COLUMN IF NOT EXISTS aggregations VARCHAR DEFAULT '[]'
 """
 
 
@@ -161,65 +202,110 @@ def list_table_files(root: str | Path) -> dict[str, int]:
     return files
 
 
-def fetch_rules(url: str, token: str, timeout: float = 5) -> dict[str, str]:
-    """The grouping rules from the app's API: {path: column, "" for default}.
+def fetch_rules(url: str, token: str, timeout: float = 5) -> dict[str, dict]:
+    """The rules from the app's API: {path: {"group_by", "aggregations"}}.
 
     Any failure raises: the sensor must not guess the columns while the app
     is down, it fails and is retried instead.
     """
     request = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
     with urllib.request.urlopen(request, timeout=timeout) as response:
-        return {rule["path"]: rule["group_by"] for rule in json.load(response)}
-
-
-def processed_files(db_path: str | Path) -> dict[str, tuple[int, str]]:
-    """{source: (modified time in ms, rule's column)} of every file done so far."""
-    with connect(db_path) as con:
-        con.execute(CREATE_PROCESSED)
-        rows = con.execute(f"SELECT source, mtime_ms, group_by FROM {PROCESSED}")
         return {
-            source: (mtime_ms, group_by)
-            for source, mtime_ms, group_by in rows.fetchall()
+            rule["path"]: {
+                "group_by": rule["group_by"],
+                "aggregations": rule.get("aggregations", []),
+            }
+            for rule in json.load(response)
         }
+
+
+def aggregations_key(aggregations: Sequence[Mapping[str, str]]) -> str:
+    """The aggregations as stable text, to compare with what was done."""
+    items = [{"op": item["op"], "column": item["column"]} for item in aggregations]
+    return json.dumps(items, sort_keys=True, separators=(",", ":"))
+
+
+def _ensure_processed(con) -> None:
+    con.execute(CREATE_PROCESSED)
+    con.execute(ADD_AGGREGATIONS_COLUMN)
+
+
+def processed_files(db_path: str | Path) -> dict[str, tuple[int, str, str]]:
+    """{source: (modified time in ms, column, aggregations_key)} of files done."""
+    with connect(db_path) as con:
+        _ensure_processed(con)
+        rows = con.execute(
+            f"SELECT source, mtime_ms, group_by, aggregations FROM {PROCESSED}"
+        )
+        return {source: tuple(rest) for source, *rest in rows.fetchall()}
 
 
 def pending(
     files: Mapping[str, int],
-    rules: Mapping[str, str],
-    processed: Mapping[str, tuple[int, str]],
+    rules: Mapping[str, Mapping],
+    processed: Mapping[str, tuple[int, str, str]],
 ) -> list[dict]:
-    """The files to group now: new ones, changed ones, ones with a new column.
+    """The files to process now: new, changed, or with a new rule.
 
     A file that failed is done too: it is not tried again until it is
     uploaded anew. A file with no rule (uploaded before the rules existed)
-    goes by the first text column.
+    goes by the first text column with no aggregations.
     """
     todo = []
     for path, mtime_ms in sorted(files.items()):
-        group_by = rules.get(path, "")
-        if processed.get(path) != (mtime_ms, group_by):
-            todo.append({"path": path, "mtime_ms": mtime_ms, "group_by": group_by})
+        rule = rules.get(path, {})
+        group_by = rule.get("group_by", "")
+        aggregations = list(rule.get("aggregations", []))
+        done = (mtime_ms, group_by, aggregations_key(aggregations))
+        if processed.get(path) != done:
+            todo.append(
+                {
+                    "path": path,
+                    "mtime_ms": mtime_ms,
+                    "group_by": group_by,
+                    "aggregations": aggregations,
+                }
+            )
     return todo
 
 
-def _mark(con, source: str, mtime_ms: int, group_by: str, error: str | None) -> None:
-    con.execute(CREATE_PROCESSED)
+def _mark(
+    con,
+    source: str,
+    mtime_ms: int,
+    group_by: str,
+    aggregations: Sequence[Mapping[str, str]],
+    error: str | None,
+) -> None:
+    _ensure_processed(con)
     con.execute(
         f"""
         INSERT OR REPLACE INTO {PROCESSED}
-            (source, mtime_ms, group_by, status, error, processed_at)
-        VALUES (?, ?, ?, ?, ?, current_timestamp)
+            (source, mtime_ms, group_by, aggregations, status, error, processed_at)
+        VALUES (?, ?, ?, ?, ?, ?, current_timestamp)
         """,
-        [source, mtime_ms, group_by, "failed" if error else "done", error],
+        [
+            source,
+            mtime_ms,
+            group_by,
+            aggregations_key(aggregations),
+            "failed" if error else "done",
+            error,
+        ],
     )
 
 
 def mark_failed(
-    db_path: str | Path, source: str, mtime_ms: int, group_by: str, error: str
+    db_path: str | Path,
+    source: str,
+    mtime_ms: int,
+    group_by: str,
+    aggregations: Sequence[Mapping[str, str]],
+    error: str,
 ) -> None:
-    """Remember a file that cannot be grouped, so it is not tried every tick."""
+    """Remember a file that cannot be processed, so it is not tried every tick."""
     with connect(db_path) as con:
-        _mark(con, source, mtime_ms, group_by, error)
+        _mark(con, source, mtime_ms, group_by, aggregations, error)
 
 
 def reader(path: str | Path) -> str:
@@ -273,6 +359,36 @@ def pick_group_column(schema: list[tuple[str, str]], wanted: str | None) -> str:
     return pick_column(names, None)
 
 
+def check_aggregations(
+    schema: list[tuple[str, str]], aggregations: Sequence[Mapping[str, str]]
+) -> list[dict]:
+    """The aggregations, checked against the file: known op, real column, numbers.
+
+    The app checks the ops too, but the columns only the file can tell.
+    """
+    types = dict(schema)
+    checked = []
+    for item in aggregations:
+        op, column = item.get("op"), item.get("column")
+        if op not in AGGREGATES:
+            raise UploadError(
+                f"Unknown aggregation {op!r}; use one of {list(AGGREGATES)}."
+            )
+        if column not in types:
+            raise UploadError(f"No column {column!r}; the file has {list(types)}.")
+        type_ = types[column].upper()
+        numeric = type_ in NUMERIC_TYPES or type_.startswith("DECIMAL")
+        if op in NUMERIC_ONLY and not numeric:
+            raise UploadError(f"{op}({column}): {column!r} is {type_}, not a number.")
+        checked.append({"op": op, "column": column})
+    return checked
+
+
+def _quote(name: str) -> str:
+    """A column name for SQL: names cannot be query parameters."""
+    return '"' + name.replace('"', '""') + '"'
+
+
 def save_groups(
     db_path: str | Path,
     path: str | Path,
@@ -281,31 +397,53 @@ def save_groups(
     *,
     mtime_ms: int,
     group_by: str,
+    aggregations: Sequence[Mapping[str, str]] = (),
 ) -> int:
-    """Replace the groups of `source` with fresh ones; returns how many.
+    """Replace the groups and aggregates of `source`; returns how many groups.
 
-    The same transaction marks the file done with its modified time and the
-    rule's column (`group_by`, maybe empty), so the groups and the mark never
+    `aggregations` must come from check_aggregations. The same transaction
+    marks the file done with its modified time and its rule (`group_by`,
+    maybe empty, and the aggregations), so the results and the mark never
     disagree.
     """
-    # A column name cannot be a query parameter, so it is quoted by hand.
-    # It is one of the file's own columns already (pick_column).
-    quoted = '"' + column.replace('"', '""') + '"'
+    # Both are the file's own columns already (pick_column, check_aggregations).
+    group = _quote(column)
     with connect(db_path) as con:
         con.execute(CREATE_TABLE)
+        con.execute(CREATE_AGGREGATES)
         con.begin()
+        # The file is read once into memory for all the queries below; uploads
+        # are small (FILE_MANAGER_MAX_FILE_SIZE).
+        con.execute(
+            f"CREATE TEMP TABLE upload AS SELECT * FROM {reader(path)}(?)",
+            [str(path)],
+        )
         # A file uploaded again under the same name must not count twice.
         con.execute(f"DELETE FROM {TABLE} WHERE source = ?", [source])
+        con.execute(f"DELETE FROM {AGGREGATES_TABLE} WHERE source = ?", [source])
         con.execute(
             f"""
             INSERT INTO {TABLE} (source, group_column, group_value, row_count)
-            SELECT ?, ?, CAST({quoted} AS VARCHAR), count(*)
-            FROM {reader(path)}(?)
-            GROUP BY {quoted}
+            SELECT ?, ?, CAST({group} AS VARCHAR), count(*)
+            FROM upload
+            GROUP BY {group}
             """,
-            [source, column, str(path)],
+            [source, column],
         )
-        _mark(con, source, mtime_ms, group_by, None)
+        for item in aggregations:
+            function = AGGREGATES[item["op"]]
+            con.execute(
+                f"""
+                INSERT INTO {AGGREGATES_TABLE}
+                    (source, group_column, group_value, op, value_column, value)
+                SELECT ?, ?, CAST({group} AS VARCHAR), ?, ?,
+                       CAST({function}({_quote(item["column"])}) AS DOUBLE)
+                FROM upload
+                GROUP BY {group}
+                """,
+                [source, column, item["op"], item["column"]],
+            )
+        _mark(con, source, mtime_ms, group_by, aggregations, None)
         con.commit()
         row = con.execute(
             f"SELECT count(*) FROM {TABLE} WHERE source = ?", [source]

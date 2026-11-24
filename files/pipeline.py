@@ -11,6 +11,14 @@ from django.conf import settings
 # airflow/dags/upload_groups.py. Other files are only stored.
 TABLE_FORMATS = (".csv", ".xlsx", ".json", ".parquet")
 
+# Math that can be asked for per group; keep in step with AGGREGATES in
+# airflow/dags/upload_groups.py. count works on any column, the rest on
+# numbers only.
+AGGREGATIONS = ("sum", "avg", "min", "max", "count")
+
+# More would make the results table hard to read and the query slow.
+MAX_AGGREGATIONS = 10
+
 
 def processing_enabled() -> bool:
     """On when Airflow has a token to read the rules with."""
@@ -19,3 +27,8 @@ def processing_enabled() -> bool:
 
 def should_process(name: str) -> bool:
     return processing_enabled() and name.lower().endswith(TABLE_FORMATS)
+
+
+def describe_aggregations(aggregations: list[dict]) -> str:
+    """The way they are typed in the form: "sum(clicks), avg(impressions)"."""
+    return ", ".join(f"{item['op']}({item['column']})" for item in aggregations)

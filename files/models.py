@@ -15,6 +15,10 @@ class GroupingRule(models.Model):
     path = models.CharField(_("path"), max_length=1024, unique=True)
     # Empty: Airflow picks the first text column of the file.
     group_by = models.CharField(_("group by column"), max_length=255, blank=True)
+    # Math per group, as [{"op": "sum", "column": "clicks"}, ...]; ops come
+    # from files.pipeline.AGGREGATIONS. The columns are checked by Airflow,
+    # which is the one to read the file.
+    aggregations = models.JSONField(_("aggregations"), default=list, blank=True)
     updated_at = models.DateTimeField(_("updated at"), auto_now=True)
 
     class Meta:
