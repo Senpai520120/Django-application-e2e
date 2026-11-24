@@ -20,6 +20,11 @@ RUN mkdir -p /app/filemanager \
 
 USER app
 
+# The grouping page reads a table file's columns with DuckDB; .xlsx needs its
+# excel extension. Fetched now, as the app user (DuckDB keeps extensions in
+# the home folder), so no request ever downloads one.
+RUN python -c "import duckdb; duckdb.sql('INSTALL excel')"
+
 EXPOSE 8000
 
 ENTRYPOINT ["/app/docker/entrypoint.sh"]

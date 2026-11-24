@@ -4,8 +4,6 @@ Names arrive from the user, so every form runs them through `files.paths` —
 the single place that decides what is allowed.
 """
 
-import re
-
 from django import forms
 from django.conf import settings
 from django.core.exceptions import SuspiciousFileOperation
@@ -13,10 +11,7 @@ from django.template.defaultfilters import filesizeformat
 from django.utils.translation import gettext_lazy as _
 
 from files.paths import MAX_NAME_LENGTH, clean_name, normalize_path
-from files.pipeline import AGGREGATIONS, MAX_AGGREGATIONS
-
-# One "op(column)"; a column name may hold spaces, not brackets or commas.
-AGGREGATION = re.compile(r"^(?P<op>[A-Za-z]+)\(\s*(?P<column>[^(),]+?)\s*\)$")
+from files.pipeline import AGGREGATIONS, MAX_AGGREGATIONS, NUMERIC_ONLY, is_numeric
 
 
 class PathField(forms.CharField):
@@ -70,39 +65,6 @@ class MultipleFileField(forms.FileField):
         return [clean_single(data, initial)]
 
 
-class AggregationsField(forms.CharField):
-    """ "sum(clicks), avg(impressions)" -> [{"op": "sum", "column": "clicks"}, ...].
-
-    Only the ops from the allowed list get through, so nothing typed here
-    ever reaches DuckDB as SQL.
-    """
-
-    def __init__(self, **kwargs):
-        kwargs.setdefault("max_length", 1000)
-        kwargs.setdefault("required", False)
-        super().__init__(**kwargs)
-
-    def clean(self, value):
-        value = super().clean(value)
-        result = []
-        for part in filter(None, (piece.strip() for piece in value.split(","))):
-            match = AGGREGATION.match(part)
-            op = match and match["op"].lower()
-            if not match or op not in AGGREGATIONS:
-                raise forms.ValidationError(
-                    _("%(part)s: write it as op(column), op one of %(ops)s.")
-                    % {"part": part, "ops": ", ".join(AGGREGATIONS)}
-                )
-            item = {"op": op, "column": match["column"]}
-            if item not in result:
-                result.append(item)
-        if len(result) > MAX_AGGREGATIONS:
-            raise forms.ValidationError(
-                _("At most %(count)s aggregations.") % {"count": MAX_AGGREGATIONS}
-            )
-        return result
-
-
 class FolderForm(forms.Form):
     path = PathField()
     name = NameField(label=_("Folder name"))
@@ -118,13 +80,6 @@ class UploadForm(forms.Form):
     # Not required at field level: a file dropped by SizeLimitUploadHandler
     # must be reported as too large, not as missing.
     files = MultipleFileField(label=_("Files"), required=False)
-    # Saved as a GroupingRule for each table file of the upload; Airflow
-    # groups the file by it. Empty: the first text column.
-    group_by = forms.CharField(
-        label=_("Group by column"), max_length=255, required=False, strip=True
-    )
-    # Math per group for the same files, e.g. "sum(clicks), avg(impressions)".
-    aggregations = AggregationsField(label=_("Aggregations"))
 
     def __init__(self, *args, oversized=(), **kwargs):
         super().__init__(*args, **kwargs)
@@ -160,3 +115,72 @@ class UploadForm(forms.Form):
                 ) from error
 
         return uploaded
+
+
+class GroupingForm(forms.Form):
+    """The column to group a table file by and the math per group.
+
+    Built from the file's own columns (files.pipeline.file_schema), so only
+    real columns can be picked, and the number-only ops are offered for number
+    columns only. A checkbox is "op:index" of the column, never a name typed
+    by hand, and anything else sent is refused as an invalid choice.
+    """
+
+    path = PathField(required=True)
+
+    def __init__(self, *args, schema: list[tuple[str, str]], **kwargs):
+        super().__init__(*args, **kwargs)
+        self.schema = schema
+        self.fields["group_by"] = forms.ChoiceField(
+            label=_("Group by"),
+            choices=[(name, name) for name, _type in schema],
+            widget=forms.RadioSelect,
+            error_messages={"required": _("Choose the column to group by.")},
+        )
+        self.fields["aggregations"] = forms.MultipleChoiceField(
+            label=_("Math per group"),
+            choices=[(value, value) for value in self.allowed_values()],
+            widget=forms.CheckboxSelectMultiple,
+            required=False,
+        )
+
+    def allowed_values(self) -> list[str]:
+        """Every "op:index" a checkbox may send, in table order."""
+        return [
+            f"{op}:{index}"
+            for index, (_name, type_) in enumerate(self.schema)
+            for op in AGGREGATIONS
+            if op not in NUMERIC_ONLY or is_numeric(type_)
+        ]
+
+    def clean_aggregations(self):
+        chosen = set(self.cleaned_data["aggregations"])
+        result = []
+        # Table order (by column, then by op), whatever order they came in.
+        for value in self.allowed_values():
+            if value in chosen:
+                op, index = value.split(":")
+                result.append({"op": op, "column": self.schema[int(index)][0]})
+        if len(result) > MAX_AGGREGATIONS:
+            raise forms.ValidationError(
+                _("At most %(count)s aggregations.") % {"count": MAX_AGGREGATIONS}
+            )
+        return result
+
+    @classmethod
+    def initial_for(cls, schema, rule) -> dict:
+        """What the page shows checked: the saved rule, or a sensible start."""
+        names = [name for name, _type in schema]
+        if rule is not None and rule.configured and rule.group_by in names:
+            group_by = rule.group_by
+        else:
+            # The DAG's own default: the first text column, else the first.
+            texts = [name for name, type_ in schema if type_.upper() == "VARCHAR"]
+            group_by = (texts or names or [""])[0]
+        index = {name: position for position, name in enumerate(names)}
+        aggregations = [
+            f"{item['op']}:{index[item['column']]}"
+            for item in (rule.aggregations if rule is not None else [])
+            if item.get("column") in index
+        ]
+        return {"group_by": group_by, "aggregations": aggregations}

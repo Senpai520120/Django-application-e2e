@@ -173,6 +173,21 @@ ul#id_groups { list-style: none; padding-left: 0; }
 .table-wrap th,
 .table-wrap td { white-space: nowrap; }
 
+/* The grouping grid (files/grouping.html): column names stay exactly as in
+   the file, not upper-cased, and the hints under the op names wrap, so the
+   whole grid fits without a horizontal scroll. */
+.grouping-grid th { text-transform: none; }
+.grouping-grid thead th { white-space: normal; text-align: center; }
+.grouping-grid thead th .hint { display: block; font-weight: normal; font-size: 0.8rem; }
+.grouping-grid td { text-align: center; }
+.grouping-grid th[scope="row"],
+.grouping-grid thead th:first-child,
+.grouping-grid td:nth-child(2) { text-align: left; }
+
+/* The grouping line under a table file's name in the list wraps, so a long
+   list of aggregations does not push the actions out of sight. */
+.table-wrap .grouping-status { white-space: normal; min-width: 12rem; }
+
 /* ------------------------------------------------------------------------
    Узкое окно: сюда попадает и телефон, и окно браузера, прижатое к половине
    экрана. Правила завязаны на ширину окна, а не на тип устройства, поэтому

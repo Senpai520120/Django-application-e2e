@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+
+{% block title %}Grouping {{ name }} — Users &amp; Roles{% endblock %}
+
+{% block content %}
+  <h1>Grouping: {{ name }}</h1>
+
+  <p class="hint">
+    Pick the column to group the rows by, and tick the math to compute in every
+    group. The columns below are read from the file itself. After you save,
+    Airflow processes the file within a minute; until then it waits.
+  </p>
+
+  {% if error %}
+    <p class="message error" role="alert" data-testid="grouping-error">
+      The file cannot be read as a table: {{ error }}
+    </p>
+    <p><a href="{{ back_url }}">← Back to the folder</a></p>
+  {% else %}
+    {% if form.non_field_errors or form.errors %}
+      <ul class="messages" role="alert">
+        {% for field, errors in form.errors.items %}
+          {% for error in errors %}<li class="message error">{{ error }}</li>{% endfor %}
+        {% endfor %}
+      </ul>
+    {% endif %}
+
+    <form method="post" action="{% url 'files:grouping' %}" data-testid="grouping-form">
+      {% csrf_token %}
+      <input type="hidden" name="path" value="{{ path }}">
+
+      <div class="table-wrap">
+        <table class="grouping-grid" data-testid="columns">
+          <thead>
+            <tr>
+              <th scope="col">Column</th>
+              <th scope="col">Type</th>
+              <th scope="col">Group by <span class="hint">rows with the same value</span></th>
+              {% for op, hint in hints %}
+                <th scope="col">{{ op }} <span class="hint">{{ hint }}</span></th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in rows %}
+              <tr data-testid="column" data-name="{{ row.name }}">
+                <th scope="row">{{ row.name }}</th>
+                <td title="{{ row.type }}">{{ row.kind }}</td>
+                <td>
+                  <input type="radio" name="group_by" value="{{ row.name }}"
+                         aria-label="Group by {{ row.name }}"
+                         {% if row.group_checked %}checked{% endif %}>
+                </td>
+                {% for cell in row.cells %}
+                  <td>
+                    {% if cell.allowed %}
+                      <input type="checkbox" name="aggregations" value="{{ cell.value }}"
+                             aria-label="{{ cell.op }} of {{ row.name }}"
+                             {% if cell.checked %}checked{% endif %}>
+                    {% else %}
+                      <span aria-hidden="true" title="numbers only">—</span>
+                    {% endif %}
+                  </td>
+                {% endfor %}
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <p class="hint">
+        <code>count</code> works on any column and skips empty cells; the rest need a
+        number column. The number of rows in each group is always counted.
+      </p>
+
+      <button type="submit">Save and process</button>
+      <a href="{{ back_url }}">Cancel</a>
+    </form>
+  {% endif %}
+{% endblock %}

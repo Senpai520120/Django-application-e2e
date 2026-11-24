@@ -203,7 +203,7 @@ def list_table_files(root: str | Path) -> dict[str, int]:
 
 
 def fetch_rules(url: str, token: str, timeout: float = 5) -> dict[str, dict]:
-    """The rules from the app's API: {path: {"group_by", "aggregations"}}.
+    """The rules from the app's API: {path: {"group_by", "aggregations", "configured"}}.
 
     Any failure raises: the sensor must not guess the columns while the app
     is down, it fails and is retried instead.
@@ -214,6 +214,8 @@ def fetch_rules(url: str, token: str, timeout: float = 5) -> dict[str, dict]:
             rule["path"]: {
                 "group_by": rule["group_by"],
                 "aggregations": rule.get("aggregations", []),
+                # An app without drafts sends no flag: all its rules are final.
+                "configured": rule.get("configured", True),
             }
             for rule in json.load(response)
         }
@@ -247,13 +249,17 @@ def pending(
 ) -> list[dict]:
     """The files to process now: new, changed, or with a new rule.
 
-    A file that failed is done too: it is not tried again until it is
-    uploaded anew. A file with no rule (uploaded before the rules existed)
-    goes by the first text column with no aggregations.
+    A file whose rule is still a draft waits: the user has not chosen its
+    column yet. A file that failed is done too: it is not tried again until
+    it is uploaded anew or its grouping is changed. A file with no rule at all
+    (uploaded before the rules existed) goes by the first text column with no
+    aggregations.
     """
     todo = []
     for path, mtime_ms in sorted(files.items()):
         rule = rules.get(path, {})
+        if not rule.get("configured", True):
+            continue
         group_by = rule.get("group_by", "")
         aggregations = list(rule.get("aggregations", []))
         done = (mtime_ms, group_by, aggregations_key(aggregations))

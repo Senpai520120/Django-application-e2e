@@ -74,6 +74,14 @@ class FilesPage(BasePage):
         self.start_delete(name)
         self.submit(self.confirm_delete_button)
 
+    def grouping_link(self, name: str):
+        """ "Grouping" next to a table file; other files have none."""
+        return self.page.get_by_role("link", name=f"Grouping {name}", exact=True)
+
+    def grouping_status(self, name: str):
+        """The line next to a table file's name: "by category, sum(qty)"."""
+        return self.entry_row(name).get_by_test_id("grouping-status")
+
     def rename(self, name: str, new_name: str) -> None:
         self.page.get_by_role("link", name=f"Rename {name}").click()
         self.new_name_input.fill(new_name)

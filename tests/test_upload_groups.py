@@ -263,8 +263,12 @@ def test_files_in_s3_are_listed(bucket):
     assert list(files) == ["reports/sales.csv"]
 
 
-def rule(group_by="", aggregations=()):
-    return {"group_by": group_by, "aggregations": list(aggregations)}
+def rule(group_by="", aggregations=(), configured=True):
+    return {
+        "group_by": group_by,
+        "aggregations": list(aggregations),
+        "configured": configured,
+    }
 
 
 SUM_CLICKS = {"op": "sum", "column": "clicks"}
@@ -373,6 +377,25 @@ def test_database_from_before_aggregations_is_upgraded(tmp_path):
     assert pending({"a.csv": 5}, {"a.csv": rule()}, done) == []
 
 
+def test_draft_rule_makes_the_file_wait():
+    files = {"draft.csv": 5, "legacy.csv": 5}
+    rules = {"draft.csv": rule(configured=False)}
+
+    todo = pending(files, rules, {})
+
+    # No rule at all is an old upload, grouped by the default; a draft waits.
+    assert [item["path"] for item in todo] == ["legacy.csv"]
+
+
+def test_draft_saved_later_is_processed():
+    files = {"seo.csv": 5}
+
+    assert pending(files, {"seo.csv": rule("device", configured=False)}, {}) == []
+    assert [
+        item["path"] for item in pending(files, {"seo.csv": rule("device")}, {})
+    ] == ["seo.csv"]
+
+
 def test_rules_are_fetched_with_the_token(monkeypatch):
     seen = {}
 
@@ -382,6 +405,7 @@ def test_rules_are_fetched_with_the_token(monkeypatch):
         body = [
             {"path": "seo.csv", "group_by": "device", "aggregations": [SUM_CLICKS]},
             {"path": "a.csv", "group_by": ""},
+            {"path": "new.csv", "group_by": "", "configured": False},
         ]
         return io.BytesIO(json.dumps(body).encode())
 
@@ -389,7 +413,11 @@ def test_rules_are_fetched_with_the_token(monkeypatch):
 
     rules = fetch_rules("http://web:8000/files/api/grouping-rules/", "tok")
 
-    assert rules == {"seo.csv": rule("device", [SUM_CLICKS]), "a.csv": rule()}
+    assert rules == {
+        "seo.csv": rule("device", [SUM_CLICKS]),
+        "a.csv": rule(),
+        "new.csv": rule(configured=False),
+    }
     assert seen == {"auth": "Bearer tok", "timeout": 5}
 
 

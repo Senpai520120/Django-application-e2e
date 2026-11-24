@@ -1,11 +1,13 @@
 """File manager views: access, limits, and path safety."""
 
+import duckdb
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.files.uploadhandler import TemporaryFileUploadHandler
 from django.urls import reverse
 
 from files.models import GroupingRule
+from files.pipeline import AGGREGATIONS
 
 FILE_URLS = [
     ("files:browse", {}),
@@ -349,6 +351,13 @@ def test_delete_of_missing_path_is_404(user_client):
 
 TOKEN = "pipeline-token"
 
+SEO = (
+    b"query,device,clicks,impressions,ctr\n"
+    b"django,mobile,12,300,0.04\n"
+    b"django,desktop,9,150,0.06\n"
+    b"airflow,mobile,7,120,\n"
+)
+
 
 @pytest.fixture
 def pipeline_on(settings):
@@ -356,105 +365,336 @@ def pipeline_on(settings):
 
 
 def rules():
-    return dict(GroupingRule.objects.values_list("path", "group_by"))
+    return {
+        rule.path: (rule.group_by, rule.aggregations, rule.configured)
+        for rule in GroupingRule.objects.all()
+    }
 
 
-def upload(client, path, *files, group_by=""):
+def upload(client, path, *files):
     return client.post(
-        reverse("files:upload"),
-        {"path": path, "files": list(files), "group_by": group_by},
-        follow=True,
+        reverse("files:upload"), {"path": path, "files": list(files)}, follow=True
     )
 
 
+def grouping(client, path, **data):
+    """POST the grouping page; `aggregations` is a list of "op:index"."""
+    return client.post(reverse("files:grouping"), {"path": path, **data}, follow=True)
+
+
+# --- upload: a draft rule, then the grouping page ---
+
+
 @pytest.mark.django_db
-def test_upload_saves_the_grouping_column(user_client, pipeline_on):
+def test_table_upload_makes_a_draft_and_opens_the_grouping_page(
+    user_client, pipeline_on
+):
     user_client.post(reverse("files:folder_create"), {"path": "", "name": "reports"})
 
-    response = upload(
-        user_client,
-        "reports",
-        SimpleUploadedFile("sales.csv", b"category\nbooks\n"),
-        group_by="category",
-    )
+    response = upload(user_client, "reports", SimpleUploadedFile("seo.csv", SEO))
 
-    assert rules() == {"reports/sales.csv": "category"}
-    assert "grouped by category within a minute" in response.content.decode()
+    assert rules() == {"reports/seo.csv": ("", [], False)}
+    assert response.redirect_chain[-1][0] == (
+        reverse("files:grouping") + "?path=reports%2Fseo.csv"
+    )
+    page = response.content.decode()
+    assert "Uploaded files: 1." in page
+    assert [row["name"] for row in response.context["rows"]] == [
+        "query",
+        "device",
+        "clicks",
+        "impressions",
+        "ctr",
+    ]
 
 
 @pytest.mark.django_db
-def test_upload_without_a_column_leaves_it_to_airflow(user_client, pipeline_on):
-    response = upload(user_client, "", SimpleUploadedFile("sales.csv", b"x"))
+def test_several_table_files_stay_in_the_list(user_client, pipeline_on):
+    response = upload(
+        user_client,
+        "",
+        SimpleUploadedFile("a.csv", SEO),
+        SimpleUploadedFile("b.csv", SEO),
+    )
 
-    assert rules() == {"sales.csv": ""}
-    assert "first text column" in response.content.decode()
+    assert response.redirect_chain[-1][0] == reverse("files:browse")
+    assert "Grouping next to it" in response.content.decode()
+    assert rules() == {"a.csv": ("", [], False), "b.csv": ("", [], False)}
+    statuses = [row["grouping"] for row in response.context["rows"]]
+    assert statuses == ["waiting for a grouping column"] * 2
 
 
 @pytest.mark.django_db
 def test_rule_has_the_name_the_file_is_stored_under(user_client, pipeline_on):
-    upload(user_client, "", SimpleUploadedFile("my sales.csv", b"x"))
+    upload(user_client, "", SimpleUploadedFile("my sales.csv", SEO))
 
-    assert rules() == {"my_sales.csv": ""}
+    assert list(rules()) == ["my_sales.csv"]
 
 
 @pytest.mark.django_db
 def test_other_uploads_get_no_rule(user_client, pipeline_on):
-    upload(user_client, "", SimpleUploadedFile("notes.txt", b"hello"), group_by="x")
+    response = upload(user_client, "", SimpleUploadedFile("notes.txt", b"hello"))
 
     assert rules() == {}
+    assert response.redirect_chain[-1][0] == reverse("files:browse")
 
 
 @pytest.mark.django_db
 def test_no_rules_without_the_pipeline(user_client, settings):
     settings.PIPELINE_API_TOKEN = ""
 
-    upload(user_client, "", SimpleUploadedFile("sales.csv", b"x"))
+    upload(user_client, "", SimpleUploadedFile("sales.csv", SEO))
 
     assert rules() == {}
 
 
 @pytest.mark.django_db
 def test_refused_upload_keeps_the_old_rule(user_client, pipeline_on):
-    upload(user_client, "", SimpleUploadedFile("sales.csv", b"x"), group_by="city")
+    upload(user_client, "", SimpleUploadedFile("sales.csv", SEO))
+    grouping(user_client, "sales.csv", group_by="device")
 
-    response = upload(
-        user_client, "", SimpleUploadedFile("sales.csv", b"y"), group_by="price"
+    response = upload(user_client, "", SimpleUploadedFile("sales.csv", b"other"))
+
+    assert rules() == {"sales.csv": ("device", [], True)}
+    assert "already exists" in response.content.decode()
+
+
+# --- the grouping page ---
+
+
+@pytest.mark.django_db
+def test_grouping_page_offers_the_file_columns(user_client, pipeline_on):
+    upload(user_client, "", SimpleUploadedFile("seo.csv", SEO))
+
+    response = user_client.get(reverse("files:grouping"), {"path": "seo.csv"})
+
+    rows = {row["name"]: row for row in response.context["rows"]}
+    # The first text column is the suggestion, as in the DAG.
+    assert [name for name, row in rows.items() if row["group_checked"]] == ["query"]
+
+    def allowed(name):
+        return [cell["op"] for cell in rows[name]["cells"] if cell["allowed"]]
+
+    assert allowed("device") == ["count"]
+    assert allowed("clicks") == ["sum", "avg", "min", "max", "count"]
+    page = response.content.decode()
+    assert 'aria-label="sum of clicks"' in page
+    assert 'aria-label="sum of device"' not in page
+    assert "how much in total" in page
+
+
+@pytest.mark.django_db
+def test_saving_the_grouping_configures_the_rule(user_client, pipeline_on):
+    upload(user_client, "", SimpleUploadedFile("seo.csv", SEO))
+
+    response = grouping(
+        user_client,
+        "seo.csv",
+        group_by="device",
+        # clicks is column 2, impressions 3, query 0.
+        aggregations=["avg:3", "sum:2", "count:0"],
     )
 
-    assert rules() == {"sales.csv": "city"}
-    assert "already exists" in response.content.decode()
+    # Stored in table order: by column, then by op.
+    assert rules() == {
+        "seo.csv": (
+            "device",
+            [
+                {"op": "count", "column": "query"},
+                {"op": "sum", "column": "clicks"},
+                {"op": "avg", "column": "impressions"},
+            ],
+            True,
+        )
+    }
+    assert response.redirect_chain[-1][0] == reverse("files:browse")
+    page = response.content.decode()
+    assert (
+        "seo.csv will be grouped by device with count(query), sum(clicks), "
+        "avg(impressions) within a minute."
+    ) in page
+    assert response.context["rows"][0]["grouping"] == (
+        "by device, count(query), sum(clicks), avg(impressions)"
+    )
+
+
+@pytest.mark.django_db
+def test_grouping_page_shows_the_saved_choice(user_client, pipeline_on):
+    upload(user_client, "", SimpleUploadedFile("seo.csv", SEO))
+    grouping(user_client, "seo.csv", group_by="device", aggregations=["max:2"])
+
+    response = user_client.get(reverse("files:grouping"), {"path": "seo.csv"})
+
+    rows = {row["name"]: row for row in response.context["rows"]}
+    assert rows["device"]["group_checked"]
+    checked = [
+        (name, cell["op"])
+        for name, row in rows.items()
+        for cell in row["cells"]
+        if cell["checked"]
+    ]
+    assert checked == [("clicks", "max")]
+
+
+@pytest.mark.django_db
+def test_changing_the_grouping_updates_the_rule(user_client, pipeline_on):
+    upload(user_client, "", SimpleUploadedFile("seo.csv", SEO))
+    grouping(user_client, "seo.csv", group_by="device", aggregations=["sum:2"])
+
+    grouping(user_client, "seo.csv", group_by="query", aggregations=[])
+
+    assert rules() == {"seo.csv": ("query", [], True)}
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "data",
+    [
+        # sum of a text column is not offered, so not accepted either.
+        {"group_by": "device", "aggregations": ["sum:1"]},
+        # A column the file does not have.
+        {"group_by": "price", "aggregations": []},
+        {"group_by": "device", "aggregations": ["sum:99"]},
+        # Anything but "op:index" of the file.
+        {"group_by": "device", "aggregations": ['sum"); DROP TABLE x; --:2']},
+        {"group_by": "device", "aggregations": ["median:2"]},
+        # No column chosen.
+        {"aggregations": ["sum:2"]},
+    ],
+)
+def test_bad_choices_are_refused(user_client, pipeline_on, data):
+    upload(user_client, "", SimpleUploadedFile("seo.csv", SEO))
+
+    response = grouping(user_client, "seo.csv", **data)
+
+    assert response.status_code == 200
+    assert response.context["form"].errors
+    assert rules() == {"seo.csv": ("", [], False)}
+
+
+@pytest.mark.django_db
+def test_too_many_aggregations_are_refused(user_client, pipeline_on):
+    upload(user_client, "", SimpleUploadedFile("seo.csv", SEO))
+    every = [f"{op}:{index}" for index in (2, 3, 4) for op in AGGREGATIONS]
+
+    response = grouping(user_client, "seo.csv", group_by="device", aggregations=every)
+
+    assert "At most 10 aggregations." in response.content.decode()
+    assert not GroupingRule.objects.get().configured
+
+
+@pytest.mark.django_db
+def test_every_table_format_offers_its_columns(user_client, pipeline_on, tmp_path):
+    with duckdb.connect() as con:
+        con.execute("INSTALL excel")
+        con.execute("LOAD excel")
+        con.execute(
+            "CREATE TABLE t AS SELECT * FROM (VALUES ('books', 10)) v(category, qty)"
+        )
+        for ext, options in [
+            ("json", "FORMAT json, ARRAY true"),
+            ("parquet", "FORMAT parquet"),
+            ("xlsx", "FORMAT xlsx, HEADER true"),
+        ]:
+            con.execute(f"COPY t TO '{tmp_path / ('t.' + ext)}' ({options})")
+    for ext in ("json", "parquet", "xlsx"):
+        payload = SimpleUploadedFile(f"t.{ext}", (tmp_path / f"t.{ext}").read_bytes())
+
+        response = upload(user_client, "", payload)
+
+        kinds = [(row["name"], row["kind"]) for row in response.context["rows"]]
+        assert kinds == [("category", "text"), ("qty", "number")], ext
+
+
+@pytest.mark.django_db
+def test_broken_table_file_says_so(user_client, pipeline_on):
+    upload(user_client, "", SimpleUploadedFile("broken.parquet", b"not parquet"))
+
+    response = user_client.get(reverse("files:grouping"), {"path": "broken.parquet"})
+
+    assert response.status_code == 422
+    assert "cannot be read as a table" in response.content.decode()
+    assert not GroupingRule.objects.get().configured
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("path", ["", "nope.csv", "notes.txt", "docs"])
+def test_grouping_page_is_only_for_existing_table_files(user_client, pipeline_on, path):
+    upload(user_client, "", SimpleUploadedFile("notes.txt", b"hello"))
+    user_client.post(reverse("files:folder_create"), {"path": "", "name": "docs"})
+
+    response = user_client.get(reverse("files:grouping"), {"path": path})
+
+    assert response.status_code == 404
+
+
+@pytest.mark.django_db
+def test_grouping_page_is_off_without_the_pipeline(user_client, settings):
+    settings.PIPELINE_API_TOKEN = ""
+    upload(user_client, "", SimpleUploadedFile("seo.csv", SEO))
+
+    response = user_client.get(reverse("files:grouping"), {"path": "seo.csv"})
+
+    assert response.status_code == 404
+
+
+@pytest.mark.django_db
+def test_anonymous_cannot_open_the_grouping_page(client, file_root, pipeline_on):
+    response = client.get(reverse("files:grouping"), {"path": "seo.csv"})
+
+    assert response.status_code == 302
+    assert "login" in response["Location"]
+
+
+@pytest.mark.django_db
+def test_file_list_links_table_files_to_their_grouping(user_client, pipeline_on):
+    upload(user_client, "", SimpleUploadedFile("notes.txt", b"hello"))
+    upload(user_client, "", SimpleUploadedFile("seo.csv", SEO))
+
+    page = user_client.get(reverse("files:browse")).content.decode()
+
+    assert 'aria-label="Grouping seo.csv"' in page
+    assert 'aria-label="Grouping notes.txt"' not in page
+    assert "waiting for a grouping column" in page
+
+
+# --- rules follow their file ---
 
 
 @pytest.mark.django_db
 def test_rename_takes_the_rule_along(user_client, pipeline_on):
-    upload(user_client, "", SimpleUploadedFile("a.csv", b"x"), group_by="city")
+    upload(user_client, "", SimpleUploadedFile("a.csv", SEO))
+    grouping(user_client, "a.csv", group_by="device")
 
     user_client.post(reverse("files:rename"), {"path": "a.csv", "new_name": "b.csv"})
 
-    assert rules() == {"b.csv": "city"}
+    assert rules() == {"b.csv": ("device", [], True)}
 
 
 @pytest.mark.django_db
 def test_renamed_folder_takes_the_rules_of_its_files(user_client, pipeline_on):
     user_client.post(reverse("files:folder_create"), {"path": "", "name": "q1"})
     user_client.post(reverse("files:folder_create"), {"path": "", "name": "q10"})
-    upload(user_client, "q1", SimpleUploadedFile("a.csv", b"x"), group_by="city")
-    upload(user_client, "q10", SimpleUploadedFile("b.csv", b"x"))
+    upload(user_client, "q1", SimpleUploadedFile("a.csv", SEO))
+    upload(user_client, "q10", SimpleUploadedFile("b.csv", SEO))
 
     user_client.post(reverse("files:rename"), {"path": "q1", "new_name": "spring"})
 
-    assert rules() == {"spring/a.csv": "city", "q10/b.csv": ""}
+    assert set(rules()) == {"spring/a.csv", "q10/b.csv"}
 
 
 @pytest.mark.django_db
 def test_delete_removes_the_rules(user_client, pipeline_on):
     user_client.post(reverse("files:folder_create"), {"path": "", "name": "q1"})
-    upload(user_client, "q1", SimpleUploadedFile("a.csv", b"x"))
-    upload(user_client, "", SimpleUploadedFile("b.csv", b"x"))
+    upload(user_client, "q1", SimpleUploadedFile("a.csv", SEO))
+    upload(user_client, "", SimpleUploadedFile("b.csv", SEO))
 
     user_client.post(reverse("files:delete"), {"path": "q1"})
 
-    assert rules() == {"b.csv": ""}
+    assert set(rules()) == {"b.csv"}
+
+
+# --- the rules API ---
 
 
 def get_rules(client, **headers):
@@ -463,15 +703,26 @@ def get_rules(client, **headers):
 
 @pytest.mark.django_db
 def test_rules_api_gives_every_rule_to_the_right_token(client, pipeline_on):
-    GroupingRule.objects.create(path="reports/sales.csv", group_by="category")
-    GroupingRule.objects.create(path="seo.csv", group_by="")
+    GroupingRule.objects.create(
+        path="reports/sales.csv",
+        group_by="category",
+        aggregations=[{"op": "sum", "column": "qty"}],
+        configured=True,
+    )
+    GroupingRule.objects.create(path="seo.csv")
 
     response = get_rules(client, authorization=f"Bearer {TOKEN}")
 
     assert response.status_code == 200
     assert response.json() == [
-        {"path": "reports/sales.csv", "group_by": "category", "aggregations": []},
-        {"path": "seo.csv", "group_by": "", "aggregations": []},
+        {
+            "path": "reports/sales.csv",
+            "group_by": "category",
+            "aggregations": [{"op": "sum", "column": "qty"}],
+            "configured": True,
+        },
+        # A draft is sent too, so Airflow knows to wait for it.
+        {"path": "seo.csv", "group_by": "", "aggregations": [], "configured": False},
     ]
 
 
@@ -500,7 +751,6 @@ def test_table_file_rules_are_shown_when_processing_is_on(user_client, pipeline_
     page = user_client.get(reverse("files:browse")).content.decode()
 
     assert 'data-testid="table-rules"' in page
-    assert 'data-testid="group-by"' in page
     assert "<code>.xlsx</code>" in page
 
 
@@ -511,98 +761,3 @@ def test_table_file_rules_are_hidden_without_processing(user_client, settings):
     page = user_client.get(reverse("files:browse")).content.decode()
 
     assert 'data-testid="table-rules"' not in page
-    assert 'data-testid="group-by"' not in page
-
-
-def upload_with_math(client, math, name="seo.csv", group_by="device"):
-    return client.post(
-        reverse("files:upload"),
-        {
-            "path": "",
-            "files": SimpleUploadedFile(name, b"x"),
-            "group_by": group_by,
-            "aggregations": math,
-        },
-        follow=True,
-    )
-
-
-@pytest.mark.django_db
-def test_upload_saves_the_aggregations(user_client, pipeline_on):
-    response = upload_with_math(user_client, " SUM(clicks) , avg( impressions ),")
-
-    rule = GroupingRule.objects.get(path="seo.csv")
-    assert rule.aggregations == [
-        {"op": "sum", "column": "clicks"},
-        {"op": "avg", "column": "impressions"},
-    ]
-    assert "with sum(clicks), avg(impressions) within a minute" in (
-        response.content.decode()
-    )
-
-
-@pytest.mark.django_db
-def test_repeated_aggregation_is_kept_once(user_client, pipeline_on):
-    upload_with_math(user_client, "max(clicks), max(clicks)")
-
-    assert GroupingRule.objects.get().aggregations == [
-        {"op": "max", "column": "clicks"}
-    ]
-
-
-@pytest.mark.django_db
-def test_column_name_with_spaces_is_allowed(user_client, pipeline_on):
-    upload_with_math(user_client, "sum(net total)")
-
-    assert GroupingRule.objects.get().aggregations == [
-        {"op": "sum", "column": "net total"}
-    ]
-
-
-@pytest.mark.django_db
-@pytest.mark.parametrize(
-    "math",
-    [
-        "median(clicks)",
-        "sum clicks",
-        "sum()",
-        "sum(a(b))",
-        'sum("x"); DROP TABLE upload_groups; --)',
-        ", ".join(f"sum(c{number})" for number in range(11)),
-    ],
-)
-def test_bad_aggregations_refuse_the_upload(user_client, pipeline_on, file_root, math):
-    response = upload_with_math(user_client, math)
-
-    assert GroupingRule.objects.count() == 0
-    assert not (file_root / "seo.csv").exists()
-    errors = [m for m in response.context["messages"] if m.level_tag == "error"]
-    assert errors
-
-
-@pytest.mark.django_db
-def test_rules_api_gives_the_aggregations(client, pipeline_on):
-    GroupingRule.objects.create(
-        path="seo.csv",
-        group_by="device",
-        aggregations=[{"op": "sum", "column": "clicks"}],
-    )
-
-    response = get_rules(client, authorization=f"Bearer {TOKEN}")
-
-    assert response.json() == [
-        {
-            "path": "seo.csv",
-            "group_by": "device",
-            "aggregations": [{"op": "sum", "column": "clicks"}],
-        }
-    ]
-
-
-@pytest.mark.django_db
-def test_aggregations_field_is_shown_with_processing(user_client, pipeline_on):
-    page = user_client.get(reverse("files:browse")).content.decode()
-
-    assert 'data-testid="aggregations"' in page
-    assert "<code>median" not in page
-    assert "<code>avg(column)</code>" in page
