@@ -729,5 +729,53 @@
     ],
     "expected": "The console opens at once with \"Personal info\", without the sign-in form.",
     "autotest": "tests/test_sso.py::test_60_app_sign_in_opens_the_keycloak_account_console"
+  },
+  {
+    "id": "TC-61",
+    "title": "Uploaded table file opens its columns for grouping",
+    "assignment": 22,
+    "preconditions": "Signed in as demo_admin. The app has PIPELINE_API_TOKEN set. An empty folder of the test is open",
+    "steps": [
+      "Upload seo.csv with the columns query, device, clicks, impressions"
+    ],
+    "expected": "The page \"Grouping: seo.csv\" opens and lists the four columns. query is chosen to group by. clicks has a sum box; device has count but no sum.",
+    "autotest": "tests/test_grouping.py::test_61_table_upload_opens_its_columns"
+  },
+  {
+    "id": "TC-62",
+    "title": "Saved grouping is confirmed, listed and shown again",
+    "assignment": 22,
+    "preconditions": "Signed in as demo_admin. The app has PIPELINE_API_TOKEN set. An empty folder of the test is open",
+    "steps": [
+      "Upload seo.csv",
+      "Choose device to group by, tick sum of clicks and avg of impressions, press \"Save and process\"",
+      "Press \"Grouping\" next to seo.csv"
+    ],
+    "expected": "The message says \"seo.csv will be grouped by device with sum(clicks), avg(impressions) within a minute.\" The list shows \"by device, sum(clicks), avg(impressions)\". The page opens again with the same choice ticked.",
+    "autotest": "tests/test_grouping.py::test_62_saved_grouping_shows_in_the_list_and_reopens"
+  },
+  {
+    "id": "TC-63",
+    "title": "Grouping is changed without uploading again",
+    "assignment": 22,
+    "preconditions": "Signed in as demo_admin. The app has PIPELINE_API_TOKEN set. An empty folder of the test is open. seo.csv is uploaded and grouped by device with sum of clicks",
+    "steps": [
+      "Press \"Grouping\" next to seo.csv",
+      "Untick sum of clicks, choose query, tick max of impressions, save"
+    ],
+    "expected": "The list shows \"by query, max(impressions)\" next to seo.csv.",
+    "autotest": "tests/test_grouping.py::test_63_grouping_can_be_changed_later"
+  },
+  {
+    "id": "TC-64",
+    "title": "Only table files get grouping; several wait in the list",
+    "assignment": 22,
+    "preconditions": "Signed in as demo_admin. The app has PIPELINE_API_TOKEN set. An empty folder of the test is open",
+    "steps": [
+      "Upload notes.txt",
+      "Upload a.csv and b.csv together"
+    ],
+    "expected": "notes.txt has no \"Grouping\" link. After the second upload the message points to the Grouping links, and both CSV files show \"waiting for a grouping column\".",
+    "autotest": "tests/test_grouping.py::test_64_other_files_and_several_tables"
   }
 ]

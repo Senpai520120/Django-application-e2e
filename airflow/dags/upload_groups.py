@@ -1,4 +1,5 @@
-"""Grouping an uploaded table file by one column into DuckDB.
+"""Finding new uploaded table files, grouping them by one column into DuckDB
+and computing the asked-for math (sum, avg, ...) per group.
 
 Plain functions with no Airflow import: the DAG calls them, and the app's
 tests run them against a real DuckDB file without an Airflow install.
@@ -6,8 +7,10 @@ tests run them against a real DuckDB file without an Airflow install.
 
 from __future__ import annotations
 
+import json
 import os
-from collections.abc import Mapping
+import urllib.request
+from collections.abc import Mapping, Sequence
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
@@ -33,6 +36,69 @@ CREATE_TABLE = f"""
         row_count    BIGINT NOT NULL,
         processed_at TIMESTAMP NOT NULL DEFAULT current_timestamp
     )
+"""
+
+
+# Math per group asked for in the app: op -> DuckDB function. Keep in step
+# with AGGREGATIONS in files/pipeline.py. Only these names ever reach SQL.
+AGGREGATES = {"sum": "sum", "avg": "avg", "min": "min", "max": "max", "count": "count"}
+
+# The ops that need numbers; count takes any column.
+NUMERIC_ONLY = {"sum", "avg", "min", "max"}
+
+NUMERIC_TYPES = {
+    "TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT",
+    "UTINYINT", "USMALLINT", "UINTEGER", "UBIGINT", "UHUGEINT",
+    "FLOAT", "DOUBLE",
+}  # fmt: skip
+
+# One row per group and op: the set of ops differs from file to file, and a
+# long table keeps one schema for all of them.
+AGGREGATES_TABLE = "upload_aggregates"
+
+CREATE_AGGREGATES = f"""
+    CREATE TABLE IF NOT EXISTS {AGGREGATES_TABLE} (
+        source       VARCHAR NOT NULL,
+        group_column VARCHAR NOT NULL,
+        group_value  VARCHAR,
+        op           VARCHAR NOT NULL,
+        value_column VARCHAR NOT NULL,
+        value        DOUBLE,
+        processed_at TIMESTAMP NOT NULL DEFAULT current_timestamp
+    )
+"""
+
+# What is already done, so the sensor never takes a file twice. A row is one
+# version of a file (its modification time) processed by one rule: its
+# column, its aggregations and its revision (how many times it was saved).
+PROCESSED = "processed_files"
+
+CREATE_PROCESSED = f"""
+    CREATE TABLE IF NOT EXISTS {PROCESSED} (
+        source       VARCHAR PRIMARY KEY,
+        mtime_ms     BIGINT NOT NULL,
+        group_by     VARCHAR NOT NULL,
+        aggregations VARCHAR NOT NULL DEFAULT '[]',
+        revision     BIGINT NOT NULL DEFAULT 0,
+        status       VARCHAR NOT NULL,
+        error        VARCHAR,
+        processed_at TIMESTAMP NOT NULL DEFAULT current_timestamp
+    )
+"""
+
+# A database made before aggregations existed lacks the column; '[]' is
+# what those files were processed with, so they are not taken again. No NOT
+# NULL here: DuckDB cannot add one with IF NOT EXISTS, and the default fills
+# the old rows anyway.
+ADD_AGGREGATIONS_COLUMN = f"""
+    ALTER TABLE {PROCESSED}
+    ADD COLUMN IF NOT EXISTS aggregations VARCHAR DEFAULT '[]'
+"""
+
+# The same for the revision: 0 is what an app without revisions sends.
+ADD_REVISION_COLUMN = f"""
+    ALTER TABLE {PROCESSED}
+    ADD COLUMN IF NOT EXISTS revision BIGINT DEFAULT 0
 """
 
 
@@ -122,6 +188,203 @@ def resolve_upload(root: str | Path, relative: str) -> str:
     return str(target)
 
 
+def list_table_files(root: str | Path) -> dict[str, int]:
+    """Every table file under `root`: {path inside it: modified time in ms}.
+
+    read_blob lists the files of a folder or of a bucket prefix alike and
+    reads no content unless asked for it. An empty or missing folder gives {}.
+    """
+    base = str(root).rstrip("/\\")
+    with connect() as con:
+        found = con.execute(
+            "SELECT filename, epoch_ms(last_modified) FROM read_blob(?)",
+            [f"{base}/**"],
+        ).fetchall()
+    files = {}
+    for filename, mtime_ms in found:
+        # Windows separators in tests; the containers have only "/".
+        relative = filename[len(base) :].replace("\\", "/").lstrip("/")
+        if PurePosixPath(relative).suffix.lower() in READERS:
+            files[relative] = mtime_ms
+    return files
+
+
+def fetch_rules(url: str, token: str, timeout: float = 5) -> dict[str, dict]:
+    """The rules from the app's API: {path: {"group_by", "aggregations", ...}}.
+
+    Each rule also has "configured" (False: a draft) and "revision" (how many
+    times the user saved it).
+
+    Any failure raises: the sensor must not guess the columns while the app
+    is down, it fails and is retried instead.
+    """
+    request = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return {
+            rule["path"]: {
+                "group_by": rule["group_by"],
+                "aggregations": rule.get("aggregations", []),
+                # An app without drafts sends no flag: all its rules are final.
+                "configured": rule.get("configured", True),
+                "revision": rule.get("revision", 0),
+            }
+            for rule in json.load(response)
+        }
+
+
+def aggregations_key(aggregations: Sequence[Mapping[str, str]]) -> str:
+    """The aggregations as stable text, to compare with what was done.
+
+    Never raises on a broken rule (no "column", not even a dict): the sensor
+    runs this for every file, and one bad rule must not stop all of them.
+    check_aggregations refuses it later, and only that file is marked failed.
+    """
+    if not isinstance(aggregations, (list, tuple)):
+        return json.dumps(repr(aggregations))
+    items = [
+        (
+            {"op": item.get("op"), "column": item.get("column")}
+            if isinstance(item, Mapping)
+            else repr(item)
+        )
+        for item in aggregations
+    ]
+    return json.dumps(items, sort_keys=True, separators=(",", ":"))
+
+
+def _ensure_processed(con) -> None:
+    con.execute(CREATE_PROCESSED)
+    con.execute(ADD_AGGREGATIONS_COLUMN)
+    con.execute(ADD_REVISION_COLUMN)
+
+
+def processed_files(db_path: str | Path) -> dict[str, tuple[int, str, str, int]]:
+    """{source: (modified time in ms, column, aggregations_key, revision)}."""
+    with connect(db_path) as con:
+        _ensure_processed(con)
+        rows = con.execute(
+            f"SELECT source, mtime_ms, group_by, aggregations, revision"
+            f" FROM {PROCESSED}"
+        )
+        return {source: tuple(rest) for source, *rest in rows.fetchall()}
+
+
+def pending(
+    files: Mapping[str, int],
+    rules: Mapping[str, Mapping],
+    processed: Mapping[str, tuple[int, str, str, int]],
+) -> list[dict]:
+    """The files to process now: new, changed, or with a newly saved rule.
+
+    A file waits while the user has not chosen its column: its rule is a
+    draft, or it has no rule at all (renamed from .txt to .csv, uploaded while
+    grouping was off). A file that failed is done too: it is not tried again
+    until it is uploaded anew or its rule is saved again, even unchanged, which
+    bumps the revision.
+    """
+    todo = []
+    for path, mtime_ms in sorted(files.items()):
+        rule = rules.get(path)
+        if rule is None or not rule.get("configured", True):
+            continue
+        group_by = rule.get("group_by") or ""
+        aggregations = rule.get("aggregations") or []
+        # Not a list (a rule broken by hand) is handed on as it is:
+        # check_aggregations fails this one file instead of the sensor.
+        revision = rule.get("revision", 0)
+        done = (mtime_ms, group_by, aggregations_key(aggregations), revision)
+        if processed.get(path) != done:
+            todo.append(
+                {
+                    "path": path,
+                    "mtime_ms": mtime_ms,
+                    "group_by": group_by,
+                    "aggregations": aggregations,
+                    "revision": revision,
+                }
+            )
+    return todo
+
+
+def forget_removed(
+    db_path: str | Path,
+    files: Mapping[str, int],
+    rules: Mapping[str, Mapping],
+    processed: Mapping[str, tuple],
+) -> list[str]:
+    """Drop the results no saved rule stands behind; returns their paths.
+
+    A result lives only while its file has a configured rule: the rules come
+    from the app's API, which fails loudly instead of answering empty. So a
+    deleted or renamed file (its rule deleted or moved), a file uploaded
+    again under the same name (a draft again) and a file with no rule (the
+    list shows it as waiting) all lose their rows, and one Save brings them
+    back from the file. The listing only adds files removed behind the app's
+    back (an S3 console), and only when it is not empty: an empty one may be
+    an unmounted volume or S3 not answering, never a reason to delete.
+    """
+    configured = {path for path, rule in rules.items() if rule.get("configured", True)}
+    gone = {path for path in processed if path not in configured}
+    if files:
+        gone |= set(processed) - set(files)
+    gone = sorted(gone)
+    if not gone:
+        # The usual tick: no write, so no write lock on DuckDB.
+        return []
+    with connect(db_path) as con:
+        con.execute(CREATE_TABLE)
+        con.execute(CREATE_AGGREGATES)
+        _ensure_processed(con)
+        con.begin()
+        for table in (TABLE, AGGREGATES_TABLE, PROCESSED):
+            con.execute(f"DELETE FROM {table} WHERE list_contains(?, source)", [gone])
+        con.commit()
+    return gone
+
+
+def _mark(
+    con,
+    source: str,
+    mtime_ms: int,
+    group_by: str,
+    aggregations: Sequence[Mapping[str, str]],
+    revision: int,
+    error: str | None,
+) -> None:
+    _ensure_processed(con)
+    con.execute(
+        f"""
+        INSERT OR REPLACE INTO {PROCESSED}
+            (source, mtime_ms, group_by, aggregations, revision, status, error,
+             processed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, current_timestamp)
+        """,
+        [
+            source,
+            mtime_ms,
+            group_by,
+            aggregations_key(aggregations),
+            revision,
+            "failed" if error else "done",
+            error,
+        ],
+    )
+
+
+def mark_failed(
+    db_path: str | Path,
+    source: str,
+    mtime_ms: int,
+    group_by: str,
+    aggregations: Sequence[Mapping[str, str]],
+    error: str,
+    revision: int = 0,
+) -> None:
+    """Remember a file that cannot be processed, so it is not tried every tick."""
+    with connect(db_path) as con:
+        _mark(con, source, mtime_ms, group_by, aggregations, revision, error)
+
+
 def reader(path: str | Path) -> str:
     """The DuckDB function that reads the file, chosen by its extension."""
     # PurePosixPath, not Path: Path would fold the // of s3://.
@@ -173,25 +436,96 @@ def pick_group_column(schema: list[tuple[str, str]], wanted: str | None) -> str:
     return pick_column(names, None)
 
 
-def save_groups(db_path: str | Path, path: str | Path, source: str, column: str) -> int:
-    """Replace the groups of `source` with fresh ones; returns how many."""
-    # A column name cannot be a query parameter, so it is quoted by hand.
-    # It is one of the file's own columns already (pick_column).
-    quoted = '"' + column.replace('"', '""') + '"'
+def check_aggregations(
+    schema: list[tuple[str, str]], aggregations: Sequence[Mapping[str, str]]
+) -> list[dict]:
+    """The aggregations, checked against the file: known op, real column, numbers.
+
+    The app checks the ops too, but the columns only the file can tell.
+    """
+    if not isinstance(aggregations, (list, tuple)):
+        raise UploadError(f"Bad aggregations {aggregations!r}; expected a list.")
+    types = dict(schema)
+    checked = []
+    for item in aggregations:
+        if not isinstance(item, Mapping):
+            raise UploadError(f"Bad aggregation {item!r}; expected op and column.")
+        op, column = item.get("op"), item.get("column")
+        if op not in AGGREGATES:
+            raise UploadError(
+                f"Unknown aggregation {op!r}; use one of {list(AGGREGATES)}."
+            )
+        if column not in types:
+            raise UploadError(f"No column {column!r}; the file has {list(types)}.")
+        type_ = types[column].upper()
+        numeric = type_ in NUMERIC_TYPES or type_.startswith("DECIMAL")
+        if op in NUMERIC_ONLY and not numeric:
+            raise UploadError(f"{op}({column}): {column!r} is {type_}, not a number.")
+        checked.append({"op": op, "column": column})
+    return checked
+
+
+def _quote(name: str) -> str:
+    """A column name for SQL: names cannot be query parameters."""
+    return '"' + name.replace('"', '""') + '"'
+
+
+def save_groups(
+    db_path: str | Path,
+    path: str | Path,
+    source: str,
+    column: str,
+    *,
+    mtime_ms: int,
+    group_by: str,
+    aggregations: Sequence[Mapping[str, str]] = (),
+    revision: int = 0,
+) -> int:
+    """Replace the groups and aggregates of `source`; returns how many groups.
+
+    `aggregations` must come from check_aggregations. The same transaction
+    marks the file done with its modified time and its rule (`group_by`,
+    maybe empty, the aggregations and the revision), so the results and the mark never
+    disagree.
+    """
+    # Both are the file's own columns already (pick_column, check_aggregations).
+    group = _quote(column)
     with connect(db_path) as con:
         con.execute(CREATE_TABLE)
+        con.execute(CREATE_AGGREGATES)
         con.begin()
+        # The file is read once into memory for all the queries below; uploads
+        # are small (FILE_MANAGER_MAX_FILE_SIZE).
+        con.execute(
+            f"CREATE TEMP TABLE upload AS SELECT * FROM {reader(path)}(?)",
+            [str(path)],
+        )
         # A file uploaded again under the same name must not count twice.
         con.execute(f"DELETE FROM {TABLE} WHERE source = ?", [source])
+        con.execute(f"DELETE FROM {AGGREGATES_TABLE} WHERE source = ?", [source])
         con.execute(
             f"""
             INSERT INTO {TABLE} (source, group_column, group_value, row_count)
-            SELECT ?, ?, CAST({quoted} AS VARCHAR), count(*)
-            FROM {reader(path)}(?)
-            GROUP BY {quoted}
+            SELECT ?, ?, CAST({group} AS VARCHAR), count(*)
+            FROM upload
+            GROUP BY {group}
             """,
-            [source, column, str(path)],
+            [source, column],
         )
+        for item in aggregations:
+            function = AGGREGATES[item["op"]]
+            con.execute(
+                f"""
+                INSERT INTO {AGGREGATES_TABLE}
+                    (source, group_column, group_value, op, value_column, value)
+                SELECT ?, ?, CAST({group} AS VARCHAR), ?, ?,
+                       CAST({function}({_quote(item["column"])}) AS DOUBLE)
+                FROM upload
+                GROUP BY {group}
+                """,
+                [source, column, item["op"], item["column"]],
+            )
+        _mark(con, source, mtime_ms, group_by, aggregations, revision, None)
         con.commit()
         row = con.execute(
             f"SELECT count(*) FROM {TABLE} WHERE source = ?", [source]

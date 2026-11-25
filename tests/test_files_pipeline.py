@@ -1,77 +1,18 @@
-"""Sending uploads to Airflow: what is asked for, and what a failure becomes."""
+"""Which uploads go to the grouping in Airflow."""
 
+import io
+
+import duckdb
 import pytest
-import requests
+from botocore.exceptions import EndpointConnectionError
 
 from files import pipeline
-
-AIRFLOW = "http://airflow.test"
-
-
-class FakeResponse:
-    def __init__(self, body, status=200):
-        self.body = body
-        self.status_code = status
-
-    def json(self):
-        return self.body
-
-    def raise_for_status(self):
-        if self.status_code >= 400:
-            raise requests.HTTPError(f"{self.status_code}")
+from files.storage import StorageError
 
 
 @pytest.fixture
-def airflow(settings):
-    settings.AIRFLOW_API_URL = AIRFLOW
-    settings.AIRFLOW_USERNAME = "django"
-    settings.AIRFLOW_PASSWORD = "secret"
-
-
-@pytest.fixture
-def calls(monkeypatch):
-    """Every requests.post as (url, kwargs); answers like a working Airflow."""
-    seen = []
-
-    def fake_post(url, **kwargs):
-        seen.append((url, kwargs))
-        if url.endswith("/auth/token"):
-            return FakeResponse({"access_token": "jwt"}, status=201)
-        return FakeResponse({"dag_run_id": "manual__1"})
-
-    monkeypatch.setattr(pipeline.requests, "post", fake_post)
-    return seen
-
-
-def test_trigger_gets_a_token_then_starts_the_dag(airflow, calls):
-    run_id = pipeline.trigger_processing("reports/sales.csv")
-
-    assert run_id == "manual__1"
-    (token_url, token_call), (run_url, run_call) = calls
-    assert token_url == f"{AIRFLOW}/auth/token"
-    assert token_call["json"] == {"username": "django", "password": "secret"}
-    assert run_url == f"{AIRFLOW}/api/v2/dags/process_upload/dagRuns"
-    assert run_call["headers"] == {"Authorization": "Bearer jwt"}
-    assert run_call["json"]["conf"] == {"path": "reports/sales.csv"}
-
-
-def test_refused_token_becomes_processing_unavailable(airflow, monkeypatch):
-    monkeypatch.setattr(
-        pipeline.requests, "post", lambda url, **kwargs: FakeResponse({}, status=401)
-    )
-
-    with pytest.raises(pipeline.ProcessingUnavailable):
-        pipeline.trigger_processing("sales.csv")
-
-
-def test_airflow_down_becomes_processing_unavailable(airflow, monkeypatch):
-    def refuse(url, **kwargs):
-        raise requests.ConnectionError("connection refused")
-
-    monkeypatch.setattr(pipeline.requests, "post", refuse)
-
-    with pytest.raises(pipeline.ProcessingUnavailable):
-        pipeline.trigger_processing("sales.csv")
+def pipeline_on(settings):
+    settings.PIPELINE_API_TOKEN = "token"
 
 
 @pytest.mark.parametrize(
@@ -87,11 +28,106 @@ def test_airflow_down_becomes_processing_unavailable(airflow, monkeypatch):
         ("csv", False),
     ],
 )
-def test_only_table_files_are_processed(airflow, name, expected):
+def test_only_table_files_are_processed(pipeline_on, name, expected):
     assert pipeline.should_process(name) is expected
 
 
-def test_nothing_is_processed_without_airflow(settings):
-    settings.AIRFLOW_API_URL = ""
+def test_nothing_is_processed_without_the_token(settings):
+    settings.PIPELINE_API_TOKEN = ""
 
     assert pipeline.should_process("sales.csv") is False
+
+
+class FakeStorage:
+    """Just open(): file_schema needs nothing else from a storage."""
+
+    def __init__(self, files):
+        self.files = files
+
+    def open(self, path):
+        return io.BytesIO(self.files[path])
+
+
+def test_schema_has_names_and_types():
+    storage = FakeStorage({"r/sales.csv": b"category,qty,price\nbooks,3,12.5\n"})
+
+    assert pipeline.file_schema(storage, "r/sales.csv") == [
+        ("category", "VARCHAR"),
+        ("qty", "BIGINT"),
+        ("price", "DOUBLE"),
+    ]
+
+
+def test_schema_of_a_broken_file_is_a_schema_error():
+    storage = FakeStorage({"x.parquet": b"not parquet"})
+
+    with pytest.raises(pipeline.SchemaError):
+        pipeline.file_schema(storage, "x.parquet")
+
+
+def test_schema_only_for_table_files():
+    with pytest.raises(pipeline.SchemaError):
+        pipeline.file_schema(FakeStorage({"a.txt": b"x"}), "a.txt")
+
+
+@pytest.mark.parametrize(
+    ("type_", "expected"),
+    [
+        ("BIGINT", True),
+        ("double", True),
+        ("DECIMAL(10,2)", True),
+        ("VARCHAR", False),
+        ("DATE", False),
+        ("BOOLEAN", False),
+    ],
+)
+def test_number_types(type_, expected):
+    assert pipeline.is_numeric(type_) is expected
+
+
+class FailingStorage:
+    """A storage that cannot hand out the file: S3 down, file just deleted."""
+
+    def __init__(self, error):
+        self.error = error
+
+    def open(self, path):
+        raise self.error
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        StorageError("File not found."),
+        OSError("Connection reset"),
+        EndpointConnectionError(endpoint_url="http://localstack:4566"),
+    ],
+)
+def test_schema_of_an_unreadable_file_is_a_schema_error(error):
+    with pytest.raises(pipeline.SchemaError) as caught:
+        pipeline.file_schema(FailingStorage(error), "seo.csv")
+
+    assert str(caught.value)
+
+
+def test_duckdb_error_with_no_message_still_explains(monkeypatch):
+    class Silent:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def execute(self, *args):
+            raise duckdb.Error("")
+
+    monkeypatch.setattr(pipeline.duckdb, "connect", lambda: Silent())
+
+    with pytest.raises(pipeline.SchemaError, match="DuckDB cannot read the file"):
+        pipeline.file_schema(FakeStorage({"a.csv": b"x\n1\n"}), "a.csv")
+
+
+def test_broken_aggregations_are_described_without_failing():
+    broken = [{"op": "sum"}, "sum(clicks)", {"op": "avg", "column": "ctr"}]
+
+    assert pipeline.describe_aggregations(broken) == "avg(ctr)"
