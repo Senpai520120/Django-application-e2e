@@ -2,9 +2,12 @@
 
 import io
 
+import duckdb
 import pytest
+from botocore.exceptions import EndpointConnectionError
 
 from files import pipeline
+from files.storage import StorageError
 
 
 @pytest.fixture
@@ -80,3 +83,51 @@ def test_schema_only_for_table_files():
 )
 def test_number_types(type_, expected):
     assert pipeline.is_numeric(type_) is expected
+
+
+class FailingStorage:
+    """A storage that cannot hand out the file: S3 down, file just deleted."""
+
+    def __init__(self, error):
+        self.error = error
+
+    def open(self, path):
+        raise self.error
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        StorageError("File not found."),
+        OSError("Connection reset"),
+        EndpointConnectionError(endpoint_url="http://localstack:4566"),
+    ],
+)
+def test_schema_of_an_unreadable_file_is_a_schema_error(error):
+    with pytest.raises(pipeline.SchemaError) as caught:
+        pipeline.file_schema(FailingStorage(error), "seo.csv")
+
+    assert str(caught.value)
+
+
+def test_duckdb_error_with_no_message_still_explains(monkeypatch):
+    class Silent:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def execute(self, *args):
+            raise duckdb.Error("")
+
+    monkeypatch.setattr(pipeline.duckdb, "connect", lambda: Silent())
+
+    with pytest.raises(pipeline.SchemaError, match="DuckDB cannot read the file"):
+        pipeline.file_schema(FakeStorage({"a.csv": b"x\n1\n"}), "a.csv")
+
+
+def test_broken_aggregations_are_described_without_failing():
+    broken = [{"op": "sum"}, "sum(clicks)", {"op": "avg", "column": "ctr"}]
+
+    assert pipeline.describe_aggregations(broken) == "avg(ctr)"

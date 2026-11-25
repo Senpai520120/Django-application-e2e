@@ -16,6 +16,7 @@ from upload_groups import (
     file_columns,
     file_schema,
     filestore_root,
+    forget_removed,
     list_table_files,
     mark_failed,
     pending,
@@ -568,3 +569,108 @@ def test_decimal_column_counts_as_a_number(tmp_path):
     save_groups(db, parquet, "prices.parquet", "kind", **MARK, aggregations=asked)
 
     assert aggregates(db) == [("a", "sum", "price", 3.75)]
+
+
+# --- a broken rule fails one file, not the sensor ---
+
+
+@pytest.mark.parametrize(
+    "broken", [[{"op": "sum"}], ["sum(clicks)"], {"op": "sum", "column": "x"}]
+)
+def test_broken_rule_does_not_stop_the_other_files(broken):
+    files = {"bad.csv": 5, "good.csv": 5}
+    rules = {"bad.csv": rule(aggregations=()), "good.csv": rule("city")}
+    rules["bad.csv"]["aggregations"] = broken
+
+    todo = pending(files, rules, {})
+
+    # Both are handed on; group_file then fails bad.csv alone.
+    assert [entry["path"] for entry in todo] == ["bad.csv", "good.csv"]
+    with pytest.raises(UploadError):
+        check_aggregations([("x", "BIGINT")], todo[0]["aggregations"])
+
+
+# --- results of renamed and deleted files are dropped ---
+
+
+def results(db, *sources):
+    """Save the same groups under each source; processed_files afterwards."""
+    for source in sources:
+        save_groups(db, db.parent / "orders.csv", source, "city", **MARK)
+    return processed_files(db)
+
+
+def sources_left(db):
+    with duckdb.connect(str(db)) as con:
+        groups = con.execute("SELECT DISTINCT source FROM upload_groups").fetchall()
+        done = con.execute("SELECT source FROM processed_files").fetchall()
+    return sorted(row[0] for row in groups), sorted(row[0] for row in done)
+
+
+def test_results_without_a_saved_rule_are_dropped(orders, tmp_path):
+    db = tmp_path / "a.duckdb"
+    processed = results(db, "kept.csv", "old.csv", "again.csv", "legacy.csv")
+    files = {"kept.csv": 1, "again.csv": 1, "legacy.csv": 1}
+    rules = {
+        "kept.csv": rule("city"),
+        # Deleted and uploaded again under the same name: a draft once more.
+        "again.csv": rule(configured=False),
+    }
+    # old.csv: deleted or renamed, no file and no rule. legacy.csv: a file
+    # with no rule, which the list shows as waiting.
+
+    gone = forget_removed(db, files, rules, processed)
+
+    assert gone == ["again.csv", "legacy.csv", "old.csv"]
+    assert sources_left(db) == (["kept.csv"], ["kept.csv"])
+
+
+def test_empty_listing_deletes_nothing_that_has_a_rule(orders, tmp_path):
+    db = tmp_path / "a.duckdb"
+    processed = results(db, "a.csv", "b.csv")
+    rules = {"a.csv": rule("city"), "b.csv": rule("city")}
+
+    # An unmounted volume or S3 not answering lists nothing at all.
+    assert forget_removed(db, {}, rules, processed) == []
+    assert sources_left(db) == (["a.csv", "b.csv"], ["a.csv", "b.csv"])
+
+
+def test_file_removed_behind_the_apps_back_is_dropped(orders, tmp_path):
+    db = tmp_path / "a.duckdb"
+    processed = results(db, "a.csv", "b.csv")
+    rules = {"a.csv": rule("city"), "b.csv": rule("city")}
+
+    # b.csv was deleted in the S3 console: its rule is still there, but a
+    # listing that is not empty no longer has it.
+    assert forget_removed(db, {"a.csv": 1}, rules, processed) == ["b.csv"]
+    assert sources_left(db) == (["a.csv"], ["a.csv"])
+
+
+def test_forget_removed_does_not_open_the_database_when_nothing_is_gone(
+    tmp_path, monkeypatch
+):
+    def no_connection(*args):
+        raise AssertionError("no write needed")
+
+    monkeypatch.setattr("upload_groups.connect", no_connection)
+
+    assert (
+        forget_removed(
+            tmp_path / "a.duckdb", {"a.csv": 1}, {"a.csv": rule()}, {"a.csv": ()}
+        )
+        == []
+    )
+
+
+def test_sums_are_exact_up_to_2_to_the_53(tmp_path):
+    csv = tmp_path / "big.csv"
+    big = 2**52 + 1
+    csv.write_text(f"kind,amount\na,{big}\na,{big}\n")
+    db = tmp_path / "a.duckdb"
+
+    asked = check_aggregations(file_schema(csv), [{"op": "sum", "column": "amount"}])
+    save_groups(db, csv, "big.csv", "kind", **MARK, aggregations=asked)
+
+    # value is DOUBLE: exact up to 2**53 (README says so); 2 * (2**52 + 1) is
+    # 2**53 + 2, still even, so it survives.
+    assert aggregates(db) == [("a", "sum", "amount", float(2 * big))]

@@ -178,9 +178,14 @@ class GroupingForm(forms.Form):
             texts = [name for name, type_ in schema if type_.upper() == "VARCHAR"]
             group_by = (texts or names or [""])[0]
         index = {name: position for position, name in enumerate(names)}
+        saved = rule.aggregations if rule is not None else []
+        # Skip what a rule broken by hand holds: this page is where it is
+        # mended, so it must open.
         aggregations = [
             f"{item['op']}:{index[item['column']]}"
-            for item in (rule.aggregations if rule is not None else [])
-            if item.get("column") in index
+            for item in (saved if isinstance(saved, list) else [])
+            if isinstance(item, dict)
+            and item.get("op") in AGGREGATIONS
+            and item.get("column") in index
         ]
         return {"group_by": group_by, "aggregations": aggregations}

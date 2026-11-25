@@ -12,7 +12,10 @@ import tempfile
 from pathlib import PurePosixPath
 
 import duckdb
+from botocore.exceptions import BotoCoreError, ClientError
 from django.conf import settings
+
+from files.storage import StorageError
 
 # Formats the DAG can read, with DuckDB's reader for each; keep in step with
 # READERS in airflow/dags/upload_groups.py. Other files are only stored.
@@ -89,8 +92,15 @@ def file_schema(storage, path: str) -> list[tuple[str, str]]:
     # Closed before DuckDB opens it (Windows will not share an open temporary
     # file), removed when the block ends.
     with tempfile.NamedTemporaryFile(suffix=suffix, delete_on_close=False) as copy:
-        with storage.open(path) as source:
-            shutil.copyfileobj(source, copy)
+        try:
+            with storage.open(path) as source:
+                shutil.copyfileobj(source, copy)
+        except (StorageError, OSError, BotoCoreError, ClientError) as error:
+            # The file went away after the page checked it, or S3 did not
+            # answer: the page says so instead of a 500.
+            raise SchemaError(
+                _first_line(error) or "The file could not be read."
+            ) from error
         copy.close()
         try:
             with duckdb.connect() as con:
@@ -98,10 +108,24 @@ def file_schema(storage, path: str) -> list[tuple[str, str]]:
                     f"DESCRIBE SELECT * FROM {reader}(?)", [copy.name]
                 ).fetchall()
         except duckdb.Error as error:
-            raise SchemaError(str(error).splitlines()[0]) from error
+            raise SchemaError(
+                _first_line(error) or "DuckDB cannot read the file."
+            ) from error
     return [(row[0], row[1]) for row in rows]
+
+
+def _first_line(error: Exception) -> str:
+    """The first line of an error, or "" for an empty message."""
+    return next(iter(str(error).splitlines()), "")
 
 
 def describe_aggregations(aggregations: list[dict]) -> str:
     """Short form for messages: "sum(clicks), avg(impressions)"."""
-    return ", ".join(f"{item['op']}({item['column']})" for item in aggregations)
+    # A rule broken by hand must not take the file list down with it.
+    if not isinstance(aggregations, list):
+        return ""
+    return ", ".join(
+        f"{item['op']}({item['column']})"
+        for item in aggregations
+        if isinstance(item, dict) and item.get("op") and item.get("column")
+    )

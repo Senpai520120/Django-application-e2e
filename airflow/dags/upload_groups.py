@@ -233,8 +233,22 @@ def fetch_rules(url: str, token: str, timeout: float = 5) -> dict[str, dict]:
 
 
 def aggregations_key(aggregations: Sequence[Mapping[str, str]]) -> str:
-    """The aggregations as stable text, to compare with what was done."""
-    items = [{"op": item["op"], "column": item["column"]} for item in aggregations]
+    """The aggregations as stable text, to compare with what was done.
+
+    Never raises on a broken rule (no "column", not even a dict): the sensor
+    runs this for every file, and one bad rule must not stop all of them.
+    check_aggregations refuses it later, and only that file is marked failed.
+    """
+    if not isinstance(aggregations, (list, tuple)):
+        return json.dumps(repr(aggregations))
+    items = [
+        (
+            {"op": item.get("op"), "column": item.get("column")}
+            if isinstance(item, Mapping)
+            else repr(item)
+        )
+        for item in aggregations
+    ]
     return json.dumps(items, sort_keys=True, separators=(",", ":"))
 
 
@@ -273,8 +287,10 @@ def pending(
         rule = rules.get(path)
         if rule is None or not rule.get("configured", True):
             continue
-        group_by = rule.get("group_by", "")
-        aggregations = list(rule.get("aggregations", []))
+        group_by = rule.get("group_by") or ""
+        aggregations = rule.get("aggregations") or []
+        # Not a list (a rule broken by hand) is handed on as it is:
+        # check_aggregations fails this one file instead of the sensor.
         revision = rule.get("revision", 0)
         done = (mtime_ms, group_by, aggregations_key(aggregations), revision)
         if processed.get(path) != done:
@@ -288,6 +304,42 @@ def pending(
                 }
             )
     return todo
+
+
+def forget_removed(
+    db_path: str | Path,
+    files: Mapping[str, int],
+    rules: Mapping[str, Mapping],
+    processed: Mapping[str, tuple],
+) -> list[str]:
+    """Drop the results no saved rule stands behind; returns their paths.
+
+    A result lives only while its file has a configured rule: the rules come
+    from the app's API, which fails loudly instead of answering empty. So a
+    deleted or renamed file (its rule deleted or moved), a file uploaded
+    again under the same name (a draft again) and a file with no rule (the
+    list shows it as waiting) all lose their rows, and one Save brings them
+    back from the file. The listing only adds files removed behind the app's
+    back (an S3 console), and only when it is not empty: an empty one may be
+    an unmounted volume or S3 not answering, never a reason to delete.
+    """
+    configured = {path for path, rule in rules.items() if rule.get("configured", True)}
+    gone = {path for path in processed if path not in configured}
+    if files:
+        gone |= set(processed) - set(files)
+    gone = sorted(gone)
+    if not gone:
+        # The usual tick: no write, so no write lock on DuckDB.
+        return []
+    with connect(db_path) as con:
+        con.execute(CREATE_TABLE)
+        con.execute(CREATE_AGGREGATES)
+        _ensure_processed(con)
+        con.begin()
+        for table in (TABLE, AGGREGATES_TABLE, PROCESSED):
+            con.execute(f"DELETE FROM {table} WHERE list_contains(?, source)", [gone])
+        con.commit()
+    return gone
 
 
 def _mark(
@@ -391,9 +443,13 @@ def check_aggregations(
 
     The app checks the ops too, but the columns only the file can tell.
     """
+    if not isinstance(aggregations, (list, tuple)):
+        raise UploadError(f"Bad aggregations {aggregations!r}; expected a list.")
     types = dict(schema)
     checked = []
     for item in aggregations:
+        if not isinstance(item, Mapping):
+            raise UploadError(f"Bad aggregation {item!r}; expected op and column.")
         op, column = item.get("op"), item.get("column")
         if op not in AGGREGATES:
             raise UploadError(

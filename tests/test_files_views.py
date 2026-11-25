@@ -8,6 +8,7 @@ from django.urls import reverse
 
 from files.models import GroupingRule
 from files.pipeline import AGGREGATIONS
+from files.storage import LocalFileStorage, StorageError
 
 FILE_URLS = [
     ("files:browse", {}),
@@ -846,3 +847,54 @@ def test_table_file_renamed_from_text_waits_for_a_grouping(user_client, pipeline
     # No rule: Airflow skips it, and the list says it waits for a choice.
     assert rules() == {}
     assert "waiting for a grouping column" in page
+
+
+@pytest.mark.django_db
+def test_grouping_page_says_so_when_the_storage_fails(
+    user_client, pipeline_on, monkeypatch
+):
+    upload(user_client, "", SimpleUploadedFile("seo.csv", SEO))
+
+    def unavailable(self, path):
+        raise StorageError("The storage did not answer.")
+
+    monkeypatch.setattr(LocalFileStorage, "open", unavailable)
+    response = user_client.get(reverse("files:grouping"), {"path": "seo.csv"})
+
+    # A page that says what went wrong, not a 500; the rule stays a draft.
+    assert response.status_code == 422
+    assert "The storage did not answer." in response.content.decode()
+    assert not GroupingRule.objects.get().configured
+
+
+@pytest.mark.django_db
+def test_file_list_survives_a_rule_broken_by_hand(user_client, pipeline_on):
+    upload(user_client, "", SimpleUploadedFile("seo.csv", SEO))
+    GroupingRule.objects.filter(path="seo.csv").update(
+        configured=True, aggregations=[{"op": "sum"}]
+    )
+
+    response = user_client.get(reverse("files:browse"))
+
+    assert response.status_code == 200
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "broken", [["sum"], [{"column": "clicks"}], "sum", {"op": "x"}]
+)
+def test_grouping_page_opens_for_a_rule_broken_by_hand(
+    user_client, pipeline_on, broken
+):
+    upload(user_client, "", SimpleUploadedFile("seo.csv", SEO))
+    GroupingRule.objects.filter(path="seo.csv").update(
+        configured=True, group_by="device", aggregations=broken
+    )
+
+    page = user_client.get(reverse("files:grouping"), {"path": "seo.csv"})
+    listing = user_client.get(reverse("files:browse"))
+
+    # This page is where the rule is mended, so it must open; the list shows
+    # the column with no dangling comma.
+    assert page.status_code == 200
+    assert [row["grouping"] for row in listing.context["rows"]] == ["by device"]

@@ -424,6 +424,18 @@ docker compose -f docker-compose.yml -f docker-compose.airflow.yml up -d --build
   `processed_at`. A long table, so one schema fits any set of aggregations.
 * A file processed again replaces its own rows in both tables in one
   transaction, so nothing is counted twice.
+* A result lives only while its file has a saved rule. On its next look the
+  sensor drops the rows of a path with no configured rule: a deleted or renamed
+  file (the rule goes or moves with it), a file uploaded again under the same
+  name (a draft again), a table file with no rule that the list shows as
+  waiting. One **Save** brings them back from the file. The store's listing
+  adds only files removed behind the app's back (an S3 console), and an empty
+  listing (an unmounted volume, S3 not answering) never deletes anything. The
+  rules come from the app's API, which fails instead of answering empty. A
+  write error here (DuckDB locked) is logged and retried on the next look; it
+  does not stop new files.
+* A rule broken by hand (an aggregation without a column, not a list) fails
+  only its own file, marked `failed`; the sensor goes on with the rest.
 
 Looking at the result:
 
@@ -992,8 +1004,11 @@ tests/            pytest-django
   not run it: the instance is a t3.micro with 1 GB of RAM, and Airflow in
   `standalone` mode needs more. There `PIPELINE_API_TOKEN` is empty, so uploads are
   saved and not grouped.
-* Renaming or deleting a file does not remove its rows from `upload_groups` in
-  DuckDB.
+* Aggregates are stored as `DOUBLE`: `sum`, `min` and `max` are exact only up
+  to 2^53 (about 9 * 10^15) and to about 15 significant digits, so a sum of
+  very large `BIGINT` values or a long `DECIMAL` loses its last digits. `DOUBLE`
+  is kept because `avg` and float columns need it anyway, and one long table
+  has one type for `value`.
 * A table file is read twice: once for the schema (to pick the column), once for
   the grouping.
 * The total size limit is counted on every upload by walking the whole storage

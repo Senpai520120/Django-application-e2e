@@ -92,8 +92,9 @@ def grouping_summary(rule: GroupingRule | None) -> str:
     if rule is None or not rule.configured:
         return _("waiting for a grouping column")
     summary = _("by %(column)s") % {"column": rule.group_by or _("first text column")}
-    if rule.aggregations:
-        summary += f", {describe_aggregations(rule.aggregations)}"
+    math = describe_aggregations(rule.aggregations)
+    if math:
+        summary += f", {math}"
     return summary
 
 

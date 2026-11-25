@@ -8,6 +8,7 @@ the run ends and @continuous starts the next one at once.
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import UTC, datetime, timedelta
 
@@ -19,6 +20,7 @@ from upload_groups import (
     fetch_rules,
     file_schema,
     filestore_root,
+    forget_removed,
     list_table_files,
     mark_failed,
     pending,
@@ -27,6 +29,8 @@ from upload_groups import (
     resolve_upload,
     save_groups,
 )
+
+log = logging.getLogger(__name__)
 
 DUCKDB_PATH = os.environ.get("DUCKDB_PATH", "/data/analytics/analytics.duckdb")
 
@@ -56,7 +60,18 @@ def watch_uploads():
         rules = fetch_rules(
             os.environ["GROUPING_RULES_URL"], os.environ["PIPELINE_API_TOKEN"]
         )
-        todo = pending(files, rules, processed_files(DUCKDB_PATH))
+        processed = processed_files(DUCKDB_PATH)
+        # Here, not in a task of its own: the sensor runs while no group_file
+        # does, so it is the one writer of DuckDB at this moment.
+        try:
+            gone = forget_removed(DUCKDB_PATH, files, rules, processed)
+        except duckdb.Error:
+            # Cleanup can wait for the next look; new files must not.
+            log.warning("Could not drop old results", exc_info=True)
+        else:
+            if gone:
+                log.info("Results with no saved rule dropped: %s", gone)
+        todo = pending(files, rules, processed)
         return PokeReturnValue(is_done=bool(todo), xcom_value=todo)
 
     # One file at a time, again because of the single DuckDB writer.
