@@ -909,3 +909,63 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 **Expected result:** The console opens at once with "Personal info", without the sign-in form.
 
 **Automated test:** `tests/test_sso.py::test_60_app_sign_in_opens_the_keycloak_account_console`
+
+## TC-61. Uploaded table file opens its columns for grouping
+
+**Assignment:** #22 File manager
+
+**Preconditions:** Signed in as demo_admin. The app has PIPELINE_API_TOKEN set. An empty folder of the test is open
+
+**Steps:**
+
+1. Upload seo.csv with the columns query, device, clicks, impressions
+
+**Expected result:** The page "Grouping: seo.csv" opens and lists the four columns. query is chosen to group by. clicks has a sum box; device has count but no sum.
+
+**Automated test:** `tests/test_grouping.py::test_61_table_upload_opens_its_columns`
+
+## TC-62. Saved grouping is confirmed, listed and shown again
+
+**Assignment:** #22 File manager
+
+**Preconditions:** Signed in as demo_admin. The app has PIPELINE_API_TOKEN set. An empty folder of the test is open
+
+**Steps:**
+
+1. Upload seo.csv
+2. Choose device to group by, tick sum of clicks and avg of impressions, press "Save and process"
+3. Press "Grouping" next to seo.csv
+
+**Expected result:** The message says "seo.csv will be grouped by device with sum(clicks), avg(impressions) within a minute." The list shows "by device, sum(clicks), avg(impressions)". The page opens again with the same choice ticked.
+
+**Automated test:** `tests/test_grouping.py::test_62_saved_grouping_shows_in_the_list_and_reopens`
+
+## TC-63. Grouping is changed without uploading again
+
+**Assignment:** #22 File manager
+
+**Preconditions:** Signed in as demo_admin. The app has PIPELINE_API_TOKEN set. An empty folder of the test is open. seo.csv is uploaded and grouped by device with sum of clicks
+
+**Steps:**
+
+1. Press "Grouping" next to seo.csv
+2. Untick sum of clicks, choose query, tick max of impressions, save
+
+**Expected result:** The list shows "by query, max(impressions)" next to seo.csv.
+
+**Automated test:** `tests/test_grouping.py::test_63_grouping_can_be_changed_later`
+
+## TC-64. Only table files get grouping; several wait in the list
+
+**Assignment:** #22 File manager
+
+**Preconditions:** Signed in as demo_admin. The app has PIPELINE_API_TOKEN set. An empty folder of the test is open
+
+**Steps:**
+
+1. Upload notes.txt
+2. Upload a.csv and b.csv together
+
+**Expected result:** notes.txt has no "Grouping" link. After the second upload the message points to the Grouping links, and both CSV files show "waiting for a grouping column".
+
+**Automated test:** `tests/test_grouping.py::test_64_other_files_and_several_tables`
