@@ -181,7 +181,13 @@ def test_trimming_and_reserved_names_stop_where_they_should(raw, expected):
 
 @pytest.mark.parametrize(
     "name",
-    ["COM1", "com9.txt", "LPT9.log", "COM" + chr(0xB9), "lpt" + chr(0xB3) + ".txt"],
+    [
+        "COM1",
+        "com9.txt",
+        "LPT9.log",
+        *("COM" + chr(code) for code in (0xB9, 0xB2, 0xB3)),
+        *("lpt" + chr(code) + ".txt" for code in (0xB9, 0xB2, 0xB3)),
+    ],
 )
 def test_every_windows_device_name_is_reserved(name):
     with pytest.raises(SuspiciousFileOperation, match="reserved by the system"):
@@ -198,3 +204,8 @@ def test_names_are_limited_to_120_characters():
     assert clean_name("a" * 120) == "a" * 120
     with pytest.raises(SuspiciousFileOperation):
         clean_name("a" * 121)
+
+
+def test_a_part_that_sorts_before_dots_is_kept():
+    # "-" sorts before "." and ".."; only ".." itself is refused.
+    assert normalize_path("-docs/a") == "-docs/a"

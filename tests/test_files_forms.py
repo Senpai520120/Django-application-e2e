@@ -86,7 +86,8 @@ def test_upload_rejects_a_file_one_byte_over_the_limit():
 
 @override_settings(FILE_MANAGER={"MAX_FILE_SIZE": LIMIT})
 def test_upload_names_the_file_dropped_while_arriving():
-    form = upload(oversized=["huge.iso"])
+    form = upload(oversized=["huge.iso", "bigger.iso"])
+    # The first one dropped is named.
     assert form.errors["files"] == [
         f"File huge.iso is larger than the allowed {filesizeformat(LIMIT)}."
     ]
@@ -229,3 +230,15 @@ def test_initial_choice_takes_saved_math_from_a_list_only():
     saved = rule("city")
     saved.aggregations = ({"op": "sum", "column": "amount"},)
     assert GroupingForm.initial_for(SCHEMA, saved)["aggregations"] == []
+
+
+def test_grouping_form_needs_the_file_path():
+    form = GroupingForm(data={"group_by": "city"}, schema=SCHEMA)
+    assert not form.is_valid()
+    assert "path" in form.errors
+
+
+def test_a_list_of_texts_is_not_a_text_column():
+    # VARCHAR[] sorts after VARCHAR: only the exact type counts as text.
+    schema = [("tags", "VARCHAR[]"), ("city", "VARCHAR")]
+    assert GroupingForm.initial_for(schema, None)["group_by"] == "city"

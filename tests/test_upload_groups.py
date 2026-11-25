@@ -815,3 +815,25 @@ def test_exact_reasons_for_refusing_a_file_or_its_math():
     with pytest.raises(UploadError) as caught:
         check_aggregations([("qty", "BIGINT")], ["sum"])
     assert str(caught.value) == "Bad aggregation 'sum'; expected op and column."
+
+
+def test_s3_secret_is_none_without_any_storage_setting():
+    assert s3_secret({}) is None
+
+
+def test_a_file_name_that_sorts_before_the_slash_is_fine(store):
+    # "-" sorts before "/": only a leading "/" makes a path absolute.
+    (store / "-sales.csv").write_text(SALES)
+    assert resolve_upload(store, "-sales.csv").endswith("-sales.csv")
+
+
+def test_a_list_of_texts_is_not_the_group_column():
+    schema = [("tags", "VARCHAR[]"), ("city", "VARCHAR")]
+    assert pick_group_column(schema, None) == "city"
+
+
+def test_a_new_file_is_not_forgotten(tmp_path):
+    rules = {"a.csv": rule(), "new.csv": rule()}
+    done = {"a.csv": (5, "", "[]", 0)}
+    files = {"a.csv": 5, "new.csv": 5}
+    assert forget_removed(tmp_path / "a.duckdb", files, rules, done) == []
