@@ -720,9 +720,16 @@ def test_rules_api_gives_every_rule_to_the_right_token(client, pipeline_on):
             "group_by": "category",
             "aggregations": [{"op": "sum", "column": "qty"}],
             "configured": True,
+            "revision": 0,
         },
         # A draft is sent too, so Airflow knows to wait for it.
-        {"path": "seo.csv", "group_by": "", "aggregations": [], "configured": False},
+        {
+            "path": "seo.csv",
+            "group_by": "",
+            "aggregations": [],
+            "configured": False,
+            "revision": 0,
+        },
     ]
 
 
@@ -761,3 +768,81 @@ def test_table_file_rules_are_hidden_without_processing(user_client, settings):
     page = user_client.get(reverse("files:browse")).content.decode()
 
     assert 'data-testid="table-rules"' not in page
+
+
+# --- edge cases found by comparing with another implementation ---
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("path", ["../seo.csv", "a/../../seo.csv"])
+def test_grouping_page_refuses_paths_outside_the_store(user_client, pipeline_on, path):
+    upload(user_client, "", SimpleUploadedFile("seo.csv", SEO))
+
+    response = user_client.get(reverse("files:grouping"), {"path": path})
+
+    # files.paths refuses it before any storage call, as on every other page.
+    assert response.status_code == 400
+
+
+@pytest.mark.django_db
+def test_table_file_without_a_rule_can_be_configured(user_client, settings):
+    # Uploaded while grouping was off: the file has no rule at all.
+    settings.PIPELINE_API_TOKEN = ""
+    upload(user_client, "", SimpleUploadedFile("seo.csv", SEO))
+    settings.PIPELINE_API_TOKEN = TOKEN
+
+    page = user_client.get(reverse("files:grouping"), {"path": "seo.csv"})
+    grouping(user_client, "seo.csv", group_by="device", aggregations=["sum:2"])
+
+    assert page.status_code == 200
+    assert rules() == {"seo.csv": ("device", [{"op": "sum", "column": "clicks"}], True)}
+
+
+@pytest.mark.django_db
+def test_rules_api_is_one_query_however_many_rules(
+    client, pipeline_on, django_assert_num_queries
+):
+    for number in range(5):
+        GroupingRule.objects.create(
+            path=f"f{number}.csv",
+            group_by="city",
+            aggregations=[{"op": "sum", "column": "qty"}],
+            configured=True,
+        )
+
+    # The aggregations live in the rule's own row: no query per rule.
+    with django_assert_num_queries(1):
+        response = get_rules(client, authorization=f"Bearer {TOKEN}")
+
+    assert len(response.json()) == 5
+
+
+# --- review fixes: retry on a second save, files with no rule wait ---
+
+
+@pytest.mark.django_db
+def test_saving_the_same_grouping_again_makes_a_new_revision(user_client, pipeline_on):
+    upload(user_client, "", SimpleUploadedFile("seo.csv", SEO))
+
+    grouping(user_client, "seo.csv", group_by="device")
+    first = GroupingRule.objects.get().revision
+    response = grouping(user_client, "seo.csv", group_by="device")
+
+    # Nothing changed but the revision: that is what makes Airflow retry a
+    # file that failed, so the "within a minute" message holds.
+    assert GroupingRule.objects.get().revision == first + 1
+    assert "will be grouped by device" in response.content.decode()
+
+
+@pytest.mark.django_db
+def test_table_file_renamed_from_text_waits_for_a_grouping(user_client, pipeline_on):
+    upload(user_client, "", SimpleUploadedFile("report.txt", SEO))
+
+    user_client.post(
+        reverse("files:rename"), {"path": "report.txt", "new_name": "report.csv"}
+    )
+    page = user_client.get(reverse("files:browse")).content.decode()
+
+    # No rule: Airflow skips it, and the list says it waits for a choice.
+    assert rules() == {}
+    assert "waiting for a grouping column" in page

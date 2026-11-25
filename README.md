@@ -345,11 +345,12 @@ docker compose -f docker-compose.yml -f docker-compose.airflow.yml up -d --build
 * **Until it is saved, nothing is processed.** The rule is made as a draft
   (`configured=False`) before the file is stored, the API hands it to Airflow
   marked so, and the sensor skips the file. DuckDB never gets a result by a
-  column nobody chose. Files uploaded before rules existed (no rule at all)
-  are still grouped by the first text column.
+  column nobody chose. A table file with no rule at all waits the same way
+  (renamed from `.txt` to `.csv`, uploaded while grouping was off): the list
+  shows it as "waiting for a grouping column" until its page is saved.
 * **Changing it later.** The same page, from the **Grouping** link, shows the
-  saved choice; saving another one makes the sensor process the file anew, with
-  no new upload. Renaming or deleting a file or a folder takes its rules along.
+  saved choice; saving it, even unchanged, makes the sensor process the file
+  anew, with no new upload: each save bumps the rule's `revision`. Renaming or deleting a file or a folder takes its rules along.
   The list shows the current choice next to each table file
   ("by device, sum(clicks)").
 * **Nothing chosen reaches SQL as text.** A checkbox sends `op:index` of a
@@ -362,19 +363,20 @@ docker compose -f docker-compose.yml -f docker-compose.airflow.yml up -d --build
   a page that says so instead of the form; its rule stays a draft.
 * The rules API, `GET /files/api/grouping-rules/`, answers
   `[{"path": ..., "group_by": ..., "aggregations": [{"op": ..., "column": ...}],
-  "configured": true}]` only to `Authorization: Bearer
+  "configured": true, "revision": 1}]` only to `Authorization: Bearer
   <PIPELINE_API_TOKEN>`; without the token it is 401, and with no
   `PIPELINE_API_TOKEN` set it does not exist (404) and uploads are only saved.
   The same token is set for the app and for Airflow in
   `docker-compose.airflow.yml`; Airflow reaches the app at `http://web:8000`.
 * `processed_files` in DuckDB is the sensor's memory: one row per file with its
-  modification time, the rule's column and aggregations, and `done` or
-  `failed`. A database made before aggregations gets the column added on the
-  first look, with `[]` for the old rows, so they are not redone. A file is taken
+  modification time, the rule's column, aggregations and revision, and `done`
+  or `failed`. A database made before aggregations or revisions gets the
+  columns added on the first look, with `[]` and `0` for the old rows, so they
+  are not redone. A file is taken
   again only when one of those changes. A file that cannot be grouped (no such
   column, a broken file) is marked `failed` with the error, its task goes red
-  once, and it is not retried until it is uploaded again or its grouping is
-  changed.
+  once, and it is not retried until it is uploaded again or its grouping page
+  is saved again (a passing S3 error is mended by one more **Save**).
 * The app down or a wrong token: the sensor task fails and is retried twice,
   then the run fails and `@continuous` starts a new one.
 * Airflow reads the files where the app keeps them. With local storage it is

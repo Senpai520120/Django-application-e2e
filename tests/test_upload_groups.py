@@ -263,11 +263,23 @@ def test_files_in_s3_are_listed(bucket):
     assert list(files) == ["reports/sales.csv"]
 
 
-def rule(group_by="", aggregations=(), configured=True):
+def rule(group_by="", aggregations=(), configured=True, revision=0):
     return {
         "group_by": group_by,
         "aggregations": list(aggregations),
         "configured": configured,
+        "revision": revision,
+    }
+
+
+def item(path, mtime_ms=5, group_by="", aggregations=(), revision=0):
+    """One entry of what pending() hands on to group_file."""
+    return {
+        "path": path,
+        "mtime_ms": mtime_ms,
+        "group_by": group_by,
+        "aggregations": list(aggregations),
+        "revision": revision,
     }
 
 
@@ -283,36 +295,27 @@ def test_pending_takes_only_what_changed():
         "math.csv": 5,
     }
     rules = {
+        "new.csv": rule(),
         "same.csv": rule("city", [SUM_CLICKS]),
         "again.csv": rule(),
         "column.csv": rule("country"),
         "math.csv": rule("city", [SUM_CLICKS]),
     }
     processed = {
-        "same.csv": (5, "city", aggregations_key([SUM_CLICKS])),
-        "again.csv": (5, "", "[]"),
-        "column.csv": (5, "device", "[]"),
-        "math.csv": (5, "city", "[]"),
-        "deleted.csv": (5, "", "[]"),
+        "same.csv": (5, "city", aggregations_key([SUM_CLICKS]), 0),
+        "again.csv": (5, "", "[]", 0),
+        "column.csv": (5, "device", "[]", 0),
+        "math.csv": (5, "city", "[]", 0),
+        "deleted.csv": (5, "", "[]", 0),
     }
 
     todo = pending(files, rules, processed)
 
     assert todo == [
-        {"path": "again.csv", "mtime_ms": 9, "group_by": "", "aggregations": []},
-        {
-            "path": "column.csv",
-            "mtime_ms": 5,
-            "group_by": "country",
-            "aggregations": [],
-        },
-        {
-            "path": "math.csv",
-            "mtime_ms": 5,
-            "group_by": "city",
-            "aggregations": [SUM_CLICKS],
-        },
-        {"path": "new.csv", "mtime_ms": 5, "group_by": "", "aggregations": []},
+        item("again.csv", mtime_ms=9),
+        item("column.csv", group_by="country"),
+        item("math.csv", group_by="city", aggregations=[SUM_CLICKS]),
+        item("new.csv"),
     ]
 
 
@@ -332,11 +335,32 @@ def test_saved_file_is_marked_done(store, tmp_path):
     )
 
     done = processed_files(db)
-    assert done == {"reports/sales.csv": (7, "", aggregations_key(asked))}
+    assert done == {"reports/sales.csv": (7, "", aggregations_key(asked), 0)}
     assert (
         pending({"reports/sales.csv": 7}, {"reports/sales.csv": rule("", asked)}, done)
         == []
     )
+
+
+def test_failed_file_is_taken_again_when_its_rule_is_saved_again(tmp_path):
+    db = tmp_path / "a.duckdb"
+    mark_failed(db, "seo.csv", 3, "device", [], "HTTP 503", revision=1)
+    done = processed_files(db)
+
+    assert pending({"seo.csv": 3}, {"seo.csv": rule("device", revision=1)}, done) == []
+    # The same choice saved again: a new revision, so the sensor retries.
+    assert pending({"seo.csv": 3}, {"seo.csv": rule("device", revision=2)}, done) == [
+        item("seo.csv", mtime_ms=3, group_by="device", revision=2)
+    ]
+
+
+def test_revision_is_kept_with_the_result(store, tmp_path):
+    db = tmp_path / "a.duckdb"
+    path = resolve_upload(store, "reports/sales.csv")
+
+    save_groups(db, path, "reports/sales.csv", "category", **MARK, revision=4)
+
+    assert processed_files(db) == {"reports/sales.csv": (1, "", "[]", 4)}
 
 
 def test_failed_file_is_not_taken_again(tmp_path):
@@ -372,19 +396,20 @@ def test_database_from_before_aggregations_is_upgraded(tmp_path):
 
     done = processed_files(db)
 
-    # Done with no aggregations, so not taken again.
-    assert done == {"a.csv": (5, "", "[]")}
+    # Done with no aggregations and revision 0, so not taken again.
+    assert done == {"a.csv": (5, "", "[]", 0)}
     assert pending({"a.csv": 5}, {"a.csv": rule()}, done) == []
 
 
-def test_draft_rule_makes_the_file_wait():
-    files = {"draft.csv": 5, "legacy.csv": 5}
-    rules = {"draft.csv": rule(configured=False)}
+def test_draft_rule_and_no_rule_make_the_file_wait():
+    files = {"draft.csv": 5, "renamed.csv": 5, "chosen.csv": 5}
+    rules = {"draft.csv": rule(configured=False), "chosen.csv": rule("city")}
 
     todo = pending(files, rules, {})
 
-    # No rule at all is an old upload, grouped by the default; a draft waits.
-    assert [item["path"] for item in todo] == ["legacy.csv"]
+    # renamed.csv has no rule (it was a .txt): nobody chose its column, so it
+    # waits like a draft instead of going by the first text column.
+    assert [entry["path"] for entry in todo] == ["chosen.csv"]
 
 
 def test_draft_saved_later_is_processed():
@@ -403,7 +428,12 @@ def test_rules_are_fetched_with_the_token(monkeypatch):
         seen["auth"] = request.get_header("Authorization")
         seen["timeout"] = timeout
         body = [
-            {"path": "seo.csv", "group_by": "device", "aggregations": [SUM_CLICKS]},
+            {
+                "path": "seo.csv",
+                "group_by": "device",
+                "aggregations": [SUM_CLICKS],
+                "revision": 3,
+            },
             {"path": "a.csv", "group_by": ""},
             {"path": "new.csv", "group_by": "", "configured": False},
         ]
@@ -414,7 +444,7 @@ def test_rules_are_fetched_with_the_token(monkeypatch):
     rules = fetch_rules("http://web:8000/files/api/grouping-rules/", "tok")
 
     assert rules == {
-        "seo.csv": rule("device", [SUM_CLICKS]),
+        "seo.csv": rule("device", [SUM_CLICKS], revision=3),
         "a.csv": rule(),
         "new.csv": rule(configured=False),
     }
@@ -520,3 +550,21 @@ def test_column_names_are_quoted(tmp_path):
     save_groups(db, csv, "odd.csv", "kind", **MARK, aggregations=asked)
 
     assert aggregates(db) == [("a", "sum", 'total "net"', 3.0)]
+
+
+def test_decimal_column_counts_as_a_number(tmp_path):
+    parquet = tmp_path / "prices.parquet"
+    with duckdb.connect() as con:
+        con.execute(
+            "COPY (SELECT * FROM (VALUES ('a', 1.25::DECIMAL(10,2)),"
+            " ('a', 2.50::DECIMAL(10,2))) t(kind, price))"
+            f" TO '{parquet}' (FORMAT parquet)"
+        )
+    schema = file_schema(parquet)
+    assert dict(schema)["price"].startswith("DECIMAL")
+    db = tmp_path / "a.duckdb"
+
+    asked = check_aggregations(schema, [{"op": "sum", "column": "price"}])
+    save_groups(db, parquet, "prices.parquet", "kind", **MARK, aggregations=asked)
+
+    assert aggregates(db) == [("a", "sum", "price", 3.75)]

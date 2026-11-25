@@ -64,6 +64,7 @@ def watch_uploads():
     def group_file(item: dict) -> int:
         source, mtime_ms, group_by = item["path"], item["mtime_ms"], item["group_by"]
         aggregations = item.get("aggregations", [])
+        revision = item.get("revision", 0)
         try:
             path = resolve_upload(filestore_root(os.environ), source)
             schema = file_schema(path)
@@ -78,13 +79,21 @@ def watch_uploads():
                 mtime_ms=mtime_ms,
                 group_by=group_by,
                 aggregations=checked,
+                revision=revision,
             )
         except (UploadError, duckdb.Error) as error:
             # A missing column or a broken file will not mend by itself: the
-            # file is marked failed and waits for a new upload. The task still
+            # file is marked failed and waits for a new upload or for its
+            # grouping to be saved again. The task still
             # goes red, so the failure shows in the UI.
             mark_failed(
-                DUCKDB_PATH, source, mtime_ms, group_by, aggregations, str(error)
+                DUCKDB_PATH,
+                source,
+                mtime_ms,
+                group_by,
+                aggregations,
+                str(error),
+                revision,
             )
             raise UploadError(f"{source}: {error}") from error
 

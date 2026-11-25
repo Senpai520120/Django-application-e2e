@@ -22,9 +22,12 @@ class GroupingRule(models.Model):
     # grouping page offers only those). Airflow checks them again.
     aggregations = models.JSONField(_("aggregations"), default=list, blank=True)
     # False from the upload until the user saves the grouping page: Airflow
-    # leaves the file alone until then, so DuckDB never gets a result by a
-    # column nobody chose.
+    # leaves the file alone until then (a table file with no rule at all
+    # waits too), so DuckDB never gets a result by a column nobody chose.
     configured = models.BooleanField(_("configured"), default=False)
+    # Grows on every save of the grouping page, even with the same choice:
+    # Airflow keeps it with what it did, so saving again retries a failed file.
+    revision = models.PositiveIntegerField(_("revision"), default=0)
     updated_at = models.DateTimeField(_("updated at"), auto_now=True)
 
     class Meta:

@@ -70,7 +70,7 @@ CREATE_AGGREGATES = f"""
 
 # What is already done, so the sensor never takes a file twice. A row is one
 # version of a file (its modification time) processed by one rule: its
-# column and its aggregations.
+# column, its aggregations and its revision (how many times it was saved).
 PROCESSED = "processed_files"
 
 CREATE_PROCESSED = f"""
@@ -79,6 +79,7 @@ CREATE_PROCESSED = f"""
         mtime_ms     BIGINT NOT NULL,
         group_by     VARCHAR NOT NULL,
         aggregations VARCHAR NOT NULL DEFAULT '[]',
+        revision     BIGINT NOT NULL DEFAULT 0,
         status       VARCHAR NOT NULL,
         error        VARCHAR,
         processed_at TIMESTAMP NOT NULL DEFAULT current_timestamp
@@ -92,6 +93,12 @@ CREATE_PROCESSED = f"""
 ADD_AGGREGATIONS_COLUMN = f"""
     ALTER TABLE {PROCESSED}
     ADD COLUMN IF NOT EXISTS aggregations VARCHAR DEFAULT '[]'
+"""
+
+# The same for the revision: 0 is what an app without revisions sends.
+ADD_REVISION_COLUMN = f"""
+    ALTER TABLE {PROCESSED}
+    ADD COLUMN IF NOT EXISTS revision BIGINT DEFAULT 0
 """
 
 
@@ -203,7 +210,10 @@ def list_table_files(root: str | Path) -> dict[str, int]:
 
 
 def fetch_rules(url: str, token: str, timeout: float = 5) -> dict[str, dict]:
-    """The rules from the app's API: {path: {"group_by", "aggregations", "configured"}}.
+    """The rules from the app's API: {path: {"group_by", "aggregations", ...}}.
+
+    Each rule also has "configured" (False: a draft) and "revision" (how many
+    times the user saved it).
 
     Any failure raises: the sensor must not guess the columns while the app
     is down, it fails and is retried instead.
@@ -216,6 +226,7 @@ def fetch_rules(url: str, token: str, timeout: float = 5) -> dict[str, dict]:
                 "aggregations": rule.get("aggregations", []),
                 # An app without drafts sends no flag: all its rules are final.
                 "configured": rule.get("configured", True),
+                "revision": rule.get("revision", 0),
             }
             for rule in json.load(response)
         }
@@ -230,14 +241,16 @@ def aggregations_key(aggregations: Sequence[Mapping[str, str]]) -> str:
 def _ensure_processed(con) -> None:
     con.execute(CREATE_PROCESSED)
     con.execute(ADD_AGGREGATIONS_COLUMN)
+    con.execute(ADD_REVISION_COLUMN)
 
 
-def processed_files(db_path: str | Path) -> dict[str, tuple[int, str, str]]:
-    """{source: (modified time in ms, column, aggregations_key)} of files done."""
+def processed_files(db_path: str | Path) -> dict[str, tuple[int, str, str, int]]:
+    """{source: (modified time in ms, column, aggregations_key, revision)}."""
     with connect(db_path) as con:
         _ensure_processed(con)
         rows = con.execute(
-            f"SELECT source, mtime_ms, group_by, aggregations FROM {PROCESSED}"
+            f"SELECT source, mtime_ms, group_by, aggregations, revision"
+            f" FROM {PROCESSED}"
         )
         return {source: tuple(rest) for source, *rest in rows.fetchall()}
 
@@ -245,24 +258,25 @@ def processed_files(db_path: str | Path) -> dict[str, tuple[int, str, str]]:
 def pending(
     files: Mapping[str, int],
     rules: Mapping[str, Mapping],
-    processed: Mapping[str, tuple[int, str, str]],
+    processed: Mapping[str, tuple[int, str, str, int]],
 ) -> list[dict]:
-    """The files to process now: new, changed, or with a new rule.
+    """The files to process now: new, changed, or with a newly saved rule.
 
-    A file whose rule is still a draft waits: the user has not chosen its
-    column yet. A file that failed is done too: it is not tried again until
-    it is uploaded anew or its grouping is changed. A file with no rule at all
-    (uploaded before the rules existed) goes by the first text column with no
-    aggregations.
+    A file waits while the user has not chosen its column: its rule is a
+    draft, or it has no rule at all (renamed from .txt to .csv, uploaded while
+    grouping was off). A file that failed is done too: it is not tried again
+    until it is uploaded anew or its rule is saved again, even unchanged, which
+    bumps the revision.
     """
     todo = []
     for path, mtime_ms in sorted(files.items()):
-        rule = rules.get(path, {})
-        if not rule.get("configured", True):
+        rule = rules.get(path)
+        if rule is None or not rule.get("configured", True):
             continue
         group_by = rule.get("group_by", "")
         aggregations = list(rule.get("aggregations", []))
-        done = (mtime_ms, group_by, aggregations_key(aggregations))
+        revision = rule.get("revision", 0)
+        done = (mtime_ms, group_by, aggregations_key(aggregations), revision)
         if processed.get(path) != done:
             todo.append(
                 {
@@ -270,6 +284,7 @@ def pending(
                     "mtime_ms": mtime_ms,
                     "group_by": group_by,
                     "aggregations": aggregations,
+                    "revision": revision,
                 }
             )
     return todo
@@ -281,20 +296,23 @@ def _mark(
     mtime_ms: int,
     group_by: str,
     aggregations: Sequence[Mapping[str, str]],
+    revision: int,
     error: str | None,
 ) -> None:
     _ensure_processed(con)
     con.execute(
         f"""
         INSERT OR REPLACE INTO {PROCESSED}
-            (source, mtime_ms, group_by, aggregations, status, error, processed_at)
-        VALUES (?, ?, ?, ?, ?, ?, current_timestamp)
+            (source, mtime_ms, group_by, aggregations, revision, status, error,
+             processed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, current_timestamp)
         """,
         [
             source,
             mtime_ms,
             group_by,
             aggregations_key(aggregations),
+            revision,
             "failed" if error else "done",
             error,
         ],
@@ -308,10 +326,11 @@ def mark_failed(
     group_by: str,
     aggregations: Sequence[Mapping[str, str]],
     error: str,
+    revision: int = 0,
 ) -> None:
     """Remember a file that cannot be processed, so it is not tried every tick."""
     with connect(db_path) as con:
-        _mark(con, source, mtime_ms, group_by, aggregations, error)
+        _mark(con, source, mtime_ms, group_by, aggregations, revision, error)
 
 
 def reader(path: str | Path) -> str:
@@ -404,12 +423,13 @@ def save_groups(
     mtime_ms: int,
     group_by: str,
     aggregations: Sequence[Mapping[str, str]] = (),
+    revision: int = 0,
 ) -> int:
     """Replace the groups and aggregates of `source`; returns how many groups.
 
     `aggregations` must come from check_aggregations. The same transaction
     marks the file done with its modified time and its rule (`group_by`,
-    maybe empty, and the aggregations), so the results and the mark never
+    maybe empty, the aggregations and the revision), so the results and the mark never
     disagree.
     """
     # Both are the file's own columns already (pick_column, check_aggregations).
@@ -449,7 +469,7 @@ def save_groups(
                 """,
                 [source, column, item["op"], item["column"]],
             )
-        _mark(con, source, mtime_ms, group_by, aggregations, None)
+        _mark(con, source, mtime_ms, group_by, aggregations, revision, None)
         con.commit()
         row = con.execute(
             f"SELECT count(*) FROM {TABLE} WHERE source = ?", [source]

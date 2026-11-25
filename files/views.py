@@ -10,6 +10,7 @@ import secrets
 
 from django.conf import settings
 from django.contrib import messages
+from django.db.models import F
 from django.http import FileResponse, Http404, JsonResponse
 from django.shortcuts import redirect, render
 from django.template.defaultfilters import filesizeformat
@@ -86,9 +87,9 @@ def grouping_url(path: str) -> str:
 
 def grouping_summary(rule: GroupingRule | None) -> str:
     """One line for the file list: what Airflow does with the file."""
-    if rule is None:
-        return ""
-    if not rule.configured:
+    # No rule (renamed from .txt, uploaded while grouping was off) waits
+    # like a draft: Airflow skips both.
+    if rule is None or not rule.configured:
         return _("waiting for a grouping column")
     summary = _("by %(column)s") % {"column": rule.group_by or _("first text column")}
     if rule.aggregations:
@@ -133,7 +134,11 @@ class BrowseView(FileManagerMixin, TemplateView):
             {
                 "entry": entry,
                 "table": grouping and not entry.is_dir and is_table(entry.name),
-                "grouping": grouping_summary(rules.get(entry.path)),
+                "grouping": (
+                    grouping_summary(rules.get(entry.path))
+                    if grouping and not entry.is_dir and is_table(entry.name)
+                    else ""
+                ),
             }
             for entry in entries
         ]
@@ -452,14 +457,14 @@ class GroupingView(FileManagerMixin, FormView):
     def form_valid(self, form):
         group_by = form.cleaned_data["group_by"]
         aggregations = form.cleaned_data["aggregations"]
-        GroupingRule.objects.update_or_create(
-            path=self.path,
-            defaults={
-                "group_by": group_by,
-                "aggregations": aggregations,
-                "configured": True,
-            },
-        )
+        rule, _created = GroupingRule.objects.get_or_create(path=self.path)
+        rule.group_by = group_by
+        rule.aggregations = aggregations
+        rule.configured = True
+        # A new revision even for the same choice: Airflow takes the file
+        # again, so Save retries a file that failed, as the message promises.
+        rule.revision = F("revision") + 1
+        rule.save()
         messages.success(
             self.request,
             grouping_message(self.path.rsplit("/", 1)[-1], group_by, aggregations),
@@ -493,7 +498,7 @@ class GroupingRulesView(View):
         # them rather than group them by a default column.
         rules = list(
             GroupingRule.objects.values(
-                "path", "group_by", "aggregations", "configured"
+                "path", "group_by", "aggregations", "configured", "revision"
             )
         )
         return JsonResponse(rules, safe=False)
