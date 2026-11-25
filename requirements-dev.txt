@@ -7,3 +7,5 @@ ruff>=0.17.5
 black>=26.10.1
 # The grouping of airflow/dags/upload_groups.py runs in tests too.
 duckdb>=2.0.0
+# Mutation testing, Linux only (see README, "Mutation testing").
+mutmut>=3.8.1; sys_platform != "win32"
