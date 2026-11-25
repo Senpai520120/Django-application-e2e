@@ -38,9 +38,10 @@ resource "random_password" "airflow_admin" {
   special = false
 }
 
-resource "random_password" "airflow_user" {
+# The token the app's grouping-rules API and Airflow's sensor share.
+resource "random_password" "pipeline_token" {
   count   = local.full ? 1 : 0
-  length  = 24
+  length  = 48
   special = false
 }
 
@@ -219,7 +220,7 @@ resource "aws_instance" "app" {
     bucket                 = aws_s3_bucket.files.bucket
     region                 = var.region
     secret_key             = random_password.secret_key.result
-    airflow_password       = one(random_password.airflow_user[*].result)
+    pipeline_token         = one(random_password.pipeline_token[*].result)
     airflow_admin_password = one(random_password.airflow_admin[*].result)
     }) : templatefile("${path.module}/user_data.sh.tftpl", {
     image           = var.image
