@@ -730,6 +730,17 @@ def test_defaults_when_the_settings_are_left_out():
     )
 
 
+def test_settings_given_are_the_ones_used():
+    assert filestore_root({"FILESTORE_ROOT": "/srv/uploads"}) == "/srv/uploads"
+    s3 = {"FILE_STORAGE_BACKEND": "s3", "AWS_STORAGE_BUCKET_NAME": "uploads"}
+    # Only slashes are trimmed from the prefix, not the letters next to them.
+    assert filestore_root({**s3, "FILE_MANAGER_S3_LOCATION": "Xbox/"}) == (
+        "s3://uploads/Xbox"
+    )
+    assert "REGION 'us-east-1'" in s3_secret(S3_ENV)
+    assert resolve_upload("s3://uploads/X/", "a.csv") == "s3://uploads/X/a.csv"
+
+
 def test_connect_without_a_file_stays_in_memory(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     with connect() as con:
