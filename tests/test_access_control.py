@@ -1,7 +1,10 @@
 """Access control for the /manage/ panel."""
 
 import pytest
+from django.contrib.auth.models import AnonymousUser
 from django.urls import reverse
+
+from accounts.permissions import is_admin
 
 
 def panel_urls(user_pk):
@@ -102,3 +105,11 @@ def test_permission_check_costs_one_query(client, group_admin):
         if 'SELECT 1 AS "a"' in query["sql"] and "auth_user_groups" in query["sql"]
     ]
     assert len(group_checks) == 1
+
+
+def test_is_admin_answers_false_for_anonymous_and_caches_the_answer(plain_user):
+    assert is_admin(AnonymousUser()) is False
+    assert is_admin(plain_user) is False
+    # The cached answer wins over a later change within the same request.
+    plain_user.is_superuser = True
+    assert is_admin(plain_user) is False

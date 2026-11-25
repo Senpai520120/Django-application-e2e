@@ -215,6 +215,24 @@ def test_s3_secret_matches_the_app_settings():
     assert "ENDPOINT" not in secret
 
 
+def test_s3_secret_quotes_values_and_needs_both_keys():
+    # CREATE SECRET takes no parameters: a quote in a value must stay text.
+    secret = s3_secret(
+        {
+            **S3_ENV,
+            "AWS_SECRET_ACCESS_KEY": "it's",
+            "AWS_S3_ENDPOINT_URL": "https://s3.example.com",
+        }
+    )
+    assert "SECRET 'it''s'" in secret
+    assert "USE_SSL true" in secret
+
+    # One key of the pair is not enough to sign requests.
+    half = {**S3_ENV, "AWS_SECRET_ACCESS_KEY": ""}
+    assert "PROVIDER credential_chain" in s3_secret(half)
+    assert "KEY_ID" not in s3_secret(half)
+
+
 def test_default_group_column_is_the_first_text_one(tmp_path):
     csv = tmp_path / "orders.csv"
     csv.write_text("id,amount,customer,city\n1,10.5,ann,Kyiv\n2,7.0,bob,Lviv\n")
@@ -337,6 +355,10 @@ def test_saved_file_is_marked_done(store, tmp_path):
 
     done = processed_files(db)
     assert done == {"reports/sales.csv": (7, "", aggregations_key(asked), 0)}
+    with duckdb.connect(str(db)) as con:
+        assert con.execute("SELECT status, error FROM processed_files").fetchall() == [
+            ("done", None)
+        ]
     assert (
         pending({"reports/sales.csv": 7}, {"reports/sales.csv": rule("", asked)}, done)
         == []
@@ -411,6 +433,13 @@ def test_draft_rule_and_no_rule_make_the_file_wait():
     # renamed.csv has no rule (it was a .txt): nobody chose its column, so it
     # waits like a draft instead of going by the first text column.
     assert [entry["path"] for entry in todo] == ["chosen.csv"]
+
+
+def test_a_waiting_file_does_not_hold_up_the_ones_after_it():
+    files = {"a-draft.csv": 5, "b-no-rule.csv": 5, "c-chosen.csv": 5}
+    rules = {"a-draft.csv": rule(configured=False), "c-chosen.csv": rule("city")}
+
+    assert [entry["path"] for entry in pending(files, rules, {})] == ["c-chosen.csv"]
 
 
 def test_draft_saved_later_is_processed():
