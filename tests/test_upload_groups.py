@@ -3,6 +3,7 @@
 import io
 import json
 import os
+from pathlib import Path
 
 import boto3
 import duckdb
@@ -12,6 +13,7 @@ from upload_groups import (
     UploadError,
     aggregations_key,
     check_aggregations,
+    connect,
     fetch_rules,
     file_columns,
     file_schema,
@@ -23,6 +25,7 @@ from upload_groups import (
     pick_column,
     pick_group_column,
     processed_files,
+    reader,
     resolve_upload,
     s3_secret,
     save_groups,
@@ -703,3 +706,101 @@ def test_sums_are_exact_up_to_2_to_the_53(tmp_path):
     # value is DOUBLE: exact up to 2**53 (README says so); 2 * (2**52 + 1) is
     # 2**53 + 2, still even, so it survives.
     assert aggregates(db) == [("a", "sum", "amount", float(2 * big))]
+
+
+# Edges the mutation runs showed unchecked: defaults, exact texts, and the
+# bits of the stable key the sensor compares against what was done.
+
+
+def test_defaults_when_the_settings_are_left_out():
+    assert filestore_root({}) == "/data/filestore"
+    s3 = {"FILE_STORAGE_BACKEND": "s3", "AWS_STORAGE_BUCKET_NAME": "uploads"}
+    assert filestore_root(s3) == "s3://uploads/filemanager"
+    assert filestore_root({**s3, "FILE_MANAGER_S3_LOCATION": "/nested/"}) == (
+        "s3://uploads/nested"
+    )
+    with pytest.raises(UploadError) as caught:
+        filestore_root({"FILE_STORAGE_BACKEND": "s3"})
+    assert str(caught.value) == (
+        "FILE_STORAGE_BACKEND=s3 needs AWS_STORAGE_BUCKET_NAME."
+    )
+    # No keys, no region: the instance role in the default region.
+    assert s3_secret(s3) == (
+        "CREATE SECRET (TYPE s3, REGION 'eu-central-1', PROVIDER credential_chain)"
+    )
+
+
+def test_connect_without_a_file_stays_in_memory(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with connect() as con:
+        con.execute("CREATE TABLE t (x INTEGER)")
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_s3_root_with_a_trailing_slash_gives_one_slash():
+    assert resolve_upload("s3://uploads/filemanager/", "r/a.csv") == (
+        "s3://uploads/filemanager/r/a.csv"
+    )
+
+
+@pytest.mark.parametrize(
+    ("path", "message"),
+    [
+        ("../secret.csv", "Bad path: '../secret.csv'"),
+        # Refused as a path, before it is even looked up on disk.
+        ("/etc/passwd", "Bad path: '/etc/passwd'"),
+        ("missing.csv", "No such file: 'missing.csv'"),
+    ],
+)
+def test_bad_upload_path_says_which(store, path, message):
+    with pytest.raises(UploadError) as caught:
+        resolve_upload(store, path)
+    assert str(caught.value) == message
+
+
+def test_root_with_a_trailing_slash_lists_the_same_names(tmp_path):
+    # An X at both ends of a name: only "/" and "\\" are trimmed, nothing else.
+    root = tmp_path / "uploadsX"
+    root.mkdir()
+    (root / "Xray.csv").write_text(SALES)
+
+    assert list(list_table_files(f"{root}/")) == ["Xray.csv"]
+
+
+def test_aggregations_key_is_stable_text():
+    asked = [{"op": "sum", "column": "clicks", "note": "ignored"}]
+    assert aggregations_key(asked) == '[{"column":"clicks","op":"sum"}]'
+    # Broken rules still give a key instead of raising.
+    assert aggregations_key("sum:clicks") == json.dumps(repr("sum:clicks"))
+    assert aggregations_key(["sum"]) == json.dumps([repr("sum")])
+
+
+def test_rules_from_before_drafts_and_revisions_count_as_final():
+    old_rule = {"group_by": "city", "aggregations": []}
+
+    assert pending({"a.csv": 5}, {"a.csv": old_rule}, {}) == [
+        item("a.csv", group_by="city")
+    ]
+    done = {"a.csv": (5, "city", "[]", 0)}
+    assert pending({"a.csv": 5}, {"a.csv": old_rule}, done) == []
+    # Its result stays: there is a final rule behind it.
+    rules = {"a.csv": old_rule}
+    assert forget_removed(Path("unused.duckdb"), {"a.csv": 5}, rules, done) == []
+
+
+def test_exact_reasons_for_refusing_a_file_or_its_math():
+    with pytest.raises(UploadError) as caught:
+        reader("notes.txt")
+    assert str(caught.value) == "Not a table file: 'notes.txt'"
+
+    with pytest.raises(UploadError) as caught:
+        pick_column([], None)
+    assert str(caught.value) == "The file has no columns."
+
+    with pytest.raises(UploadError) as caught:
+        check_aggregations([("qty", "BIGINT")], "sum:qty")
+    assert str(caught.value) == "Bad aggregations 'sum:qty'; expected a list."
+
+    with pytest.raises(UploadError) as caught:
+        check_aggregations([("qty", "BIGINT")], ["sum"])
+    assert str(caught.value) == "Bad aggregation 'sum'; expected op and column."

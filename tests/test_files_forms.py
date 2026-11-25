@@ -9,12 +9,22 @@ page's starting choice.
 from types import SimpleNamespace
 
 import pytest
+from django import forms
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.template.defaultfilters import filesizeformat
 from django.test import override_settings
 from django.utils.datastructures import MultiValueDict
 
-from files.forms import FolderForm, GroupingForm, RenameForm, UploadForm
+from files.forms import (
+    FolderForm,
+    GroupingForm,
+    MultipleFileField,
+    MultipleFileInput,
+    NameField,
+    PathField,
+    RenameForm,
+    UploadForm,
+)
 from files.paths import MAX_NAME_LENGTH
 from files.pipeline import MAX_AGGREGATIONS
 
@@ -88,7 +98,14 @@ def test_upload_without_files_is_required():
 
 
 @pytest.mark.parametrize(
-    "name", ["C:\\Users\\me\\report.csv", "folder/report.csv", "report.csv"]
+    "name",
+    [
+        "C:\\Users\\me\\report.csv",
+        "folder/report.csv",
+        "report.csv",
+        # Only the backslash splits: "my con.txt" is a fine name, "con.txt" is not.
+        "C:\\docs\\my con.txt",
+    ],
 )
 def test_upload_checks_only_the_last_part_of_a_browser_path(name):
     assert upload(a_file(name)).is_valid()
@@ -169,3 +186,46 @@ def test_initial_choice_shows_the_saved_rule_and_skips_broken_items():
     broken = rule("note", aggregations=None)
     broken.aggregations = "sum:amount"
     assert GroupingForm.initial_for(SCHEMA, broken)["aggregations"] == []
+
+
+# The forms build these fields once, at import; built here, a test sees what
+# each field does by default.
+def test_fields_have_their_defaults():
+    assert PathField().required is False
+    name = NameField()
+    assert name.max_length == MAX_NAME_LENGTH
+    assert name.strip is True
+    files = MultipleFileField()
+    assert isinstance(files.widget, MultipleFileInput)
+    assert files.widget.attrs == {"multiple": True}
+
+
+def test_multiple_file_field_cleans_one_file_a_list_and_the_initial():
+    field = MultipleFileField(required=False)
+    one, two = a_file("a.txt"), a_file("b.txt")
+    assert field.clean(one) == [one]
+    assert field.clean([one, two]) == [one, two]
+    # Nothing sent: Django's FileField hands back the file already there.
+    assert field.clean(None, "old.txt") == ["old.txt"]
+    assert field.clean([None], "old.txt") == ["old.txt"]
+
+
+def test_upload_form_takes_its_data_positionally():
+    form = UploadForm({"path": ""}, MultiValueDict({"files": [a_file("a.txt")]}))
+    assert form.is_valid(), form.errors
+
+
+def test_grouping_form_takes_data_positionally_and_labels_its_fields():
+    form = GroupingForm({"path": "t.csv", "group_by": "city"}, schema=SCHEMA)
+    assert form.is_valid(), form.errors
+    group_by, aggregations = form.fields["group_by"], form.fields["aggregations"]
+    assert group_by.label == "Group by"
+    assert isinstance(group_by.widget, forms.RadioSelect)
+    assert aggregations.label == "Math per group"
+    assert isinstance(aggregations.widget, forms.CheckboxSelectMultiple)
+
+
+def test_initial_choice_takes_saved_math_from_a_list_only():
+    saved = rule("city")
+    saved.aggregations = ({"op": "sum", "column": "amount"},)
+    assert GroupingForm.initial_for(SCHEMA, saved)["aggregations"] == []

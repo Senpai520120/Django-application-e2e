@@ -177,3 +177,24 @@ def test_name_of_exactly_the_maximum_length_is_kept():
 )
 def test_trimming_and_reserved_names_stop_where_they_should(raw, expected):
     assert clean_name(raw) == expected
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["COM1", "com9.txt", "LPT9.log", "COM" + chr(0xB9), "lpt" + chr(0xB3) + ".txt"],
+)
+def test_every_windows_device_name_is_reserved(name):
+    with pytest.raises(SuspiciousFileOperation, match="reserved by the system"):
+        clean_name(name)
+
+
+@pytest.mark.parametrize("name", ["COM0.txt", "COM10.txt", "LPT0", "LPT10.log"])
+def test_device_names_stop_at_nine(name):
+    assert clean_name(name) == name
+
+
+def test_names_are_limited_to_120_characters():
+    # The limit itself, not only the constant: a changed constant shows here.
+    assert clean_name("a" * 120) == "a" * 120
+    with pytest.raises(SuspiciousFileOperation):
+        clean_name("a" * 121)
