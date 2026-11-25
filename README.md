@@ -539,15 +539,16 @@ docker run --rm -v "${PWD}:/repo" python:3.12-slim sh /repo/scripts/run_mutation
 writes `mutation-report.json`:
 
 ```
-Mutation score: 815/983 caught = 82.9%
+Mutation score: 941/971 caught = 96.9%
   accounts/permissions.py             killed       18
-  airflow/dags/upload_groups.py       killed       425
-  airflow/dags/upload_groups.py       survived     74
-  files/forms.py                      killed       173
-  files/forms.py                      survived     62
-  files/paths.py                      killed       136
-  files/paths.py                      survived     20
-  ...
+  airflow/dags/upload_groups.py       killed       492
+  airflow/dags/upload_groups.py       survived     7
+  files/forms.py                      killed       228
+  files/forms.py                      survived     7
+  files/paths.py                      killed       130
+  files/paths.py                      survived     14
+  files/pipeline.py                   killed       73
+  files/pipeline.py                   survived     2
 ```
 
 The **mutation score** is caught / tested mutants. A timeout counts as caught
@@ -580,14 +581,33 @@ Mutant survived: every unit test still passes after
 and the issues show up in the project under the rule
 `external_mutmut:survived-mutant` (Maintainability, medium).
 
-Most of what survives is equivalent or cosmetic: a changed default for an
-environment variable the tests always set, a form label, a SQL keyword in
-another case. The first run scored 70.7%; the tests added after it (exact
-error texts, the length limit at its edge, a quote inside an S3 key, a waiting
-file ahead of a ready one, `docs/../other`) brought it to 82.9%.
+The 30 that survive are equivalent, each for a reason worth knowing:
+
+* `files/paths.py`: the checks after `posixpath.normpath` cannot fire for a
+  path that got through the loop before them. They stay on purpose, as a
+  second line of defence in the code that stops path traversal.
+* `files/forms.py`: Django has already cut everything up to the last `/` off an
+  uploaded file's name, so the code that does the same is a safety net.
+* `airflow/dags/upload_groups.py`: DuckDB reads SQL keywords in any case,
+  HTTP header names are case-insensitive, and the `\` handling only matters
+  for paths on Windows.
+
+The first run scored 70.7% (695/983). The tests and fixes added after it
+brought it to 96.9%. They cover exact error texts, limits at their edge, field
+defaults, and settings left out or given.
+Mutation testing also found two problems in the code:
+
+* `COM1`-`COM3` and `LPT1`-`LPT3` written with superscript digits are reserved
+  by Windows but were allowed;
+* three checks in `files/paths.py` repeated what the next line already did.
+
+[cosmic-ray](https://github.com/sixty-north/cosmic-ray) was run on the same
+files as a second opinion. Its own mutants inside type hints such as
+`str | Path` cannot be killed in a module with `from __future__ import
+annotations`. Leaving those out, it now catches 396 of 407 (97.3%).
 
 A run takes about seven minutes on a 12-core machine (two for `pip install`,
-five for 983 mutants), and every changed line of code shifts the result. So it
+five for 971 mutants), and every changed line of code shifts the result. So it
 stays a check you run by hand before touching the mutated files, not a CI job
 that would slow down every pull request.
 
