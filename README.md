@@ -297,20 +297,23 @@ Every line above is covered by tests: `tests/test_files_paths.py`,
 ### Grouping uploaded tables in Airflow
 
 A `.csv`, `.xlsx`, `.json` or `.parquet` file uploaded through the file manager
-is grouped by one of its columns, optionally with math per group (sum, avg,
-min, max, count), and the result lands in DuckDB. The app never calls Airflow:
-Airflow watches the uploads itself and asks the app only how each file is
-processed.
+is grouped by a column the user picks, optionally with math per group (sum,
+avg, min, max, count), and the result lands in DuckDB. The app never calls
+Airflow: Airflow watches the uploads itself and asks the app only how each file
+is processed.
 
 ```
-Upload form (files + "Group by column" + "Aggregations")
-    -> UploadView: GroupingRule(path, group_by, aggregations) in Postgres, then the file
+Upload form (files)
+    -> UploadView: a draft GroupingRule(path, configured=False), then the file
+    -> the grouping page (/files/grouping/?path=...): the file's own columns,
+       read with DuckDB; pick the column, tick the math -> configured=True
 Airflow, DAG watch_uploads (airflow/dags/watch_uploads.py), always running:
     new_uploads   sensor, every 30 s:
                     files in the store (DuckDB read_blob: folder or bucket)
                   + GET /files/api/grouping-rules/  (Bearer PIPELINE_API_TOKEN)
                   - what processed_files in DuckDB already has
                   = new files, changed files, files with a new rule
+                    (a draft waits until the user saves its grouping)
     group_file    one mapped task per file, one at a time:
                     GROUP BY the column -> upload_groups,
                     each aggregation per group -> upload_aggregates,
@@ -329,35 +332,51 @@ docker compose -f docker-compose.yml -f docker-compose.airflow.yml up -d --build
 * The run is `@continuous`: when it ends, the next starts at once. After an
   hour with nothing new the sensor gives up as `skipped` (not failed), the run
   ends and a fresh one takes over, so the history does not grow every 30 s.
-* The column comes from the upload form and is kept in the app's database
-  (`files.models.GroupingRule`). Empty means the file's first text (`VARCHAR`)
-  column, or the first column if there is no text one. To group a file by
-  another column or with other math, delete it and upload it again: the
-  storage never overwrites a file. Renaming or deleting a file or a folder
-  takes its rules along.
-* Aggregations are typed in the form as `sum(clicks), avg(impressions)`, at
-  most 10. The ops are `sum`, `avg`, `min`, `max` and `count`: `count` takes any
-  column and skips empty values, the others need a number column. Nothing typed
-  there reaches SQL as is: the app lets through only the known ops
-  (`files/pipeline.py:AGGREGATIONS`), and Airflow maps each op to its DuckDB
-  function from its own list (`upload_groups.py:AGGREGATES`), checks the
-  column exists and is a number, and quotes the column name. An unknown column
-  or a text column under `sum` marks the file `failed`, like a missing group
-  column does.
+* **Choosing the grouping.** Uploading one table file leads straight to its
+  grouping page; after several, each waits in the list as "waiting for a
+  grouping column" with a **Grouping** link. The page lists the file's columns
+  with their kind (text or number), read by DuckDB from a temporary copy of the
+  file (`files/pipeline.py:file_schema`; the same reader Airflow uses, so local
+  disk and S3 work alike). One radio picks the column to group by; it starts at
+  the first text column, as the DAG would choose. A grid of checkboxes picks
+  the math, at most 10: `sum`, `avg`, `min` and `max` are offered for number
+  columns only, `count` (which skips empty cells) for any. Each op has a
+  one-line hint of what it answers.
+* **Until it is saved, nothing is processed.** The rule is made as a draft
+  (`configured=False`) before the file is stored, the API hands it to Airflow
+  marked so, and the sensor skips the file. DuckDB never gets a result by a
+  column nobody chose. A table file with no rule at all waits the same way
+  (renamed from `.txt` to `.csv`, uploaded while grouping was off): the list
+  shows it as "waiting for a grouping column" until its page is saved.
+* **Changing it later.** The same page, from the **Grouping** link, shows the
+  saved choice; saving it, even unchanged, makes the sensor process the file
+  anew, with no new upload: each save bumps the rule's `revision`. Renaming or deleting a file or a folder takes its rules along.
+  The list shows the current choice next to each table file
+  ("by device, sum(clicks)").
+* **Nothing chosen reaches SQL as text.** A checkbox sends `op:index` of a
+  column of the file, and the form refuses any other value; the column name is
+  taken from the file. Airflow checks again: it maps each op to its DuckDB
+  function from its own list (`upload_groups.py:AGGREGATES`), checks the column
+  exists and is a number, and quotes the column name. A file that still fails
+  there (the file changed under the rule) is marked `failed`.
+* A file the app cannot read as a table (a broken `.parquet`, no columns) gets
+  a page that says so instead of the form; its rule stays a draft.
 * The rules API, `GET /files/api/grouping-rules/`, answers
-  `[{"path": ..., "group_by": ..., "aggregations": [{"op": ..., "column": ...}]}]`
-  only to `Authorization: Bearer
+  `[{"path": ..., "group_by": ..., "aggregations": [{"op": ..., "column": ...}],
+  "configured": true, "revision": 1}]` only to `Authorization: Bearer
   <PIPELINE_API_TOKEN>`; without the token it is 401, and with no
   `PIPELINE_API_TOKEN` set it does not exist (404) and uploads are only saved.
   The same token is set for the app and for Airflow in
   `docker-compose.airflow.yml`; Airflow reaches the app at `http://web:8000`.
 * `processed_files` in DuckDB is the sensor's memory: one row per file with its
-  modification time, the rule's column and aggregations, and `done` or
-  `failed`. A database made before aggregations gets the column added on the
-  first look, with `[]` for the old rows, so they are not redone. A file is taken
+  modification time, the rule's column, aggregations and revision, and `done`
+  or `failed`. A database made before aggregations or revisions gets the
+  columns added on the first look, with `[]` and `0` for the old rows, so they
+  are not redone. A file is taken
   again only when one of those changes. A file that cannot be grouped (no such
   column, a broken file) is marked `failed` with the error, its task goes red
-  once, and it is not retried until it is uploaded again.
+  once, and it is not retried until it is uploaded again or its grouping page
+  is saved again (a passing S3 error is mended by one more **Save**).
 * The app down or a wrong token: the sensor task fails and is retried twice,
   then the run fails and `@continuous` starts a new one.
 * Airflow reads the files where the app keeps them. With local storage it is
@@ -405,6 +424,18 @@ docker compose -f docker-compose.yml -f docker-compose.airflow.yml up -d --build
   `processed_at`. A long table, so one schema fits any set of aggregations.
 * A file processed again replaces its own rows in both tables in one
   transaction, so nothing is counted twice.
+* A result lives only while its file has a saved rule. On its next look the
+  sensor drops the rows of a path with no configured rule: a deleted or renamed
+  file (the rule goes or moves with it), a file uploaded again under the same
+  name (a draft again), a table file with no rule that the list shows as
+  waiting. One **Save** brings them back from the file. The store's listing
+  adds only files removed behind the app's back (an S3 console), and an empty
+  listing (an unmounted volume, S3 not answering) never deletes anything. The
+  rules come from the app's API, which fails instead of answering empty. A
+  write error here (DuckDB locked) is logged and retried on the next look; it
+  does not stop new files.
+* A rule broken by hand (an aggregation without a column, not a list) fails
+  only its own file, marked `failed`; the sensor goes on with the rest.
 
 Looking at the result:
 
@@ -412,14 +443,18 @@ Looking at the result:
 docker compose -f docker-compose.yml -f docker-compose.airflow.yml exec airflow   python -c "import duckdb; c = duckdb.connect('/data/analytics/analytics.duckdb', read_only=True); print(c.sql('select * from upload_groups')); print(c.sql('select * from upload_aggregates')); print(c.sql('select * from processed_files'))"
 ```
 
-Tests: `tests/test_files_pipeline.py` (which uploads are grouped),
-`tests/test_files_views.py` (rules saved with an upload, moved and deleted
-with the file, the rules API and its token),
-`tests/test_upload_groups.py` (listing the store, choosing what is new, the
-grouping on a real DuckDB file, from disk and from a real S3 endpoint served
-by moto). CI also has a job, `airflow-dags`, that starts the airflow service
-and checks that `airflow dags list-import-errors` is empty and `watch_uploads`
-is listed. The live chain upload -> Airflow -> DuckDB is not run in CI.
+Tests: `tests/test_files_pipeline.py` (which uploads are grouped, reading a
+file's columns and types), `tests/test_files_views.py` (the draft rule of an
+upload, the grouping page: offered columns, saving, changing, refused choices,
+every format, a broken file, access; rules moved and deleted with the file,
+the rules API and its token), `tests/test_upload_groups.py` (listing the store,
+choosing what is new, drafts waiting, the grouping on a real DuckDB file, from
+disk and from a real S3 endpoint served by moto). `e2e/tests/test_grouping.py`
+(TC-61 to TC-64) clicks through the grouping page in a browser in all four E2E
+modes; the E2E stack sets `PIPELINE_API_TOKEN` for that and runs no Airflow.
+CI also has a job, `airflow-dags`, that starts the airflow service and checks
+that `airflow dags list-import-errors` is empty and `watch_uploads` is listed.
+The live chain upload -> Airflow -> DuckDB is not run in CI.
 
 ## Tests
 
@@ -666,6 +701,7 @@ e2e/
     ├── test_roles.py     grant and revoke a role, self-lockout ban, audit log
     ├── test_folders.py   create, nest, breadcrumbs, duplicates, delete
     ├── test_files.py     upload, rename, download, delete, the size limit
+    ├── test_grouping.py  the grouping page: columns of the file, saving, changing
     ├── test_sso.py       the Keycloak form, single sign-on and sign-out (E2E_AUTH=keycloak)
     └── test_ad.py        Active Directory people signing in through Keycloak (E2E_AUTH=ad)
 ```
@@ -968,8 +1004,11 @@ tests/            pytest-django
   not run it: the instance is a t3.micro with 1 GB of RAM, and Airflow in
   `standalone` mode needs more. There `PIPELINE_API_TOKEN` is empty, so uploads are
   saved and not grouped.
-* Renaming or deleting a file does not remove its rows from `upload_groups` in
-  DuckDB.
+* Aggregates are stored as `DOUBLE`: `sum`, `min` and `max` are exact only up
+  to 2^53 (about 9 * 10^15) and to about 15 significant digits, so a sum of
+  very large `BIGINT` values or a long `DECIMAL` loses its last digits. `DOUBLE`
+  is kept because `avg` and float columns need it anyway, and one long table
+  has one type for `value`.
 * A table file is read twice: once for the schema (to pick the column), once for
   the grouping.
 * The total size limit is counted on every upload by walking the whole storage

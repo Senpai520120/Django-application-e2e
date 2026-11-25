@@ -16,6 +16,7 @@ from upload_groups import (
     file_columns,
     file_schema,
     filestore_root,
+    forget_removed,
     list_table_files,
     mark_failed,
     pending,
@@ -263,8 +264,24 @@ def test_files_in_s3_are_listed(bucket):
     assert list(files) == ["reports/sales.csv"]
 
 
-def rule(group_by="", aggregations=()):
-    return {"group_by": group_by, "aggregations": list(aggregations)}
+def rule(group_by="", aggregations=(), configured=True, revision=0):
+    return {
+        "group_by": group_by,
+        "aggregations": list(aggregations),
+        "configured": configured,
+        "revision": revision,
+    }
+
+
+def item(path, mtime_ms=5, group_by="", aggregations=(), revision=0):
+    """One entry of what pending() hands on to group_file."""
+    return {
+        "path": path,
+        "mtime_ms": mtime_ms,
+        "group_by": group_by,
+        "aggregations": list(aggregations),
+        "revision": revision,
+    }
 
 
 SUM_CLICKS = {"op": "sum", "column": "clicks"}
@@ -279,36 +296,27 @@ def test_pending_takes_only_what_changed():
         "math.csv": 5,
     }
     rules = {
+        "new.csv": rule(),
         "same.csv": rule("city", [SUM_CLICKS]),
         "again.csv": rule(),
         "column.csv": rule("country"),
         "math.csv": rule("city", [SUM_CLICKS]),
     }
     processed = {
-        "same.csv": (5, "city", aggregations_key([SUM_CLICKS])),
-        "again.csv": (5, "", "[]"),
-        "column.csv": (5, "device", "[]"),
-        "math.csv": (5, "city", "[]"),
-        "deleted.csv": (5, "", "[]"),
+        "same.csv": (5, "city", aggregations_key([SUM_CLICKS]), 0),
+        "again.csv": (5, "", "[]", 0),
+        "column.csv": (5, "device", "[]", 0),
+        "math.csv": (5, "city", "[]", 0),
+        "deleted.csv": (5, "", "[]", 0),
     }
 
     todo = pending(files, rules, processed)
 
     assert todo == [
-        {"path": "again.csv", "mtime_ms": 9, "group_by": "", "aggregations": []},
-        {
-            "path": "column.csv",
-            "mtime_ms": 5,
-            "group_by": "country",
-            "aggregations": [],
-        },
-        {
-            "path": "math.csv",
-            "mtime_ms": 5,
-            "group_by": "city",
-            "aggregations": [SUM_CLICKS],
-        },
-        {"path": "new.csv", "mtime_ms": 5, "group_by": "", "aggregations": []},
+        item("again.csv", mtime_ms=9),
+        item("column.csv", group_by="country"),
+        item("math.csv", group_by="city", aggregations=[SUM_CLICKS]),
+        item("new.csv"),
     ]
 
 
@@ -328,11 +336,32 @@ def test_saved_file_is_marked_done(store, tmp_path):
     )
 
     done = processed_files(db)
-    assert done == {"reports/sales.csv": (7, "", aggregations_key(asked))}
+    assert done == {"reports/sales.csv": (7, "", aggregations_key(asked), 0)}
     assert (
         pending({"reports/sales.csv": 7}, {"reports/sales.csv": rule("", asked)}, done)
         == []
     )
+
+
+def test_failed_file_is_taken_again_when_its_rule_is_saved_again(tmp_path):
+    db = tmp_path / "a.duckdb"
+    mark_failed(db, "seo.csv", 3, "device", [], "HTTP 503", revision=1)
+    done = processed_files(db)
+
+    assert pending({"seo.csv": 3}, {"seo.csv": rule("device", revision=1)}, done) == []
+    # The same choice saved again: a new revision, so the sensor retries.
+    assert pending({"seo.csv": 3}, {"seo.csv": rule("device", revision=2)}, done) == [
+        item("seo.csv", mtime_ms=3, group_by="device", revision=2)
+    ]
+
+
+def test_revision_is_kept_with_the_result(store, tmp_path):
+    db = tmp_path / "a.duckdb"
+    path = resolve_upload(store, "reports/sales.csv")
+
+    save_groups(db, path, "reports/sales.csv", "category", **MARK, revision=4)
+
+    assert processed_files(db) == {"reports/sales.csv": (1, "", "[]", 4)}
 
 
 def test_failed_file_is_not_taken_again(tmp_path):
@@ -368,9 +397,29 @@ def test_database_from_before_aggregations_is_upgraded(tmp_path):
 
     done = processed_files(db)
 
-    # Done with no aggregations, so not taken again.
-    assert done == {"a.csv": (5, "", "[]")}
+    # Done with no aggregations and revision 0, so not taken again.
+    assert done == {"a.csv": (5, "", "[]", 0)}
     assert pending({"a.csv": 5}, {"a.csv": rule()}, done) == []
+
+
+def test_draft_rule_and_no_rule_make_the_file_wait():
+    files = {"draft.csv": 5, "renamed.csv": 5, "chosen.csv": 5}
+    rules = {"draft.csv": rule(configured=False), "chosen.csv": rule("city")}
+
+    todo = pending(files, rules, {})
+
+    # renamed.csv has no rule (it was a .txt): nobody chose its column, so it
+    # waits like a draft instead of going by the first text column.
+    assert [entry["path"] for entry in todo] == ["chosen.csv"]
+
+
+def test_draft_saved_later_is_processed():
+    files = {"seo.csv": 5}
+
+    assert pending(files, {"seo.csv": rule("device", configured=False)}, {}) == []
+    assert [
+        item["path"] for item in pending(files, {"seo.csv": rule("device")}, {})
+    ] == ["seo.csv"]
 
 
 def test_rules_are_fetched_with_the_token(monkeypatch):
@@ -380,8 +429,14 @@ def test_rules_are_fetched_with_the_token(monkeypatch):
         seen["auth"] = request.get_header("Authorization")
         seen["timeout"] = timeout
         body = [
-            {"path": "seo.csv", "group_by": "device", "aggregations": [SUM_CLICKS]},
+            {
+                "path": "seo.csv",
+                "group_by": "device",
+                "aggregations": [SUM_CLICKS],
+                "revision": 3,
+            },
             {"path": "a.csv", "group_by": ""},
+            {"path": "new.csv", "group_by": "", "configured": False},
         ]
         return io.BytesIO(json.dumps(body).encode())
 
@@ -389,7 +444,11 @@ def test_rules_are_fetched_with_the_token(monkeypatch):
 
     rules = fetch_rules("http://web:8000/files/api/grouping-rules/", "tok")
 
-    assert rules == {"seo.csv": rule("device", [SUM_CLICKS]), "a.csv": rule()}
+    assert rules == {
+        "seo.csv": rule("device", [SUM_CLICKS], revision=3),
+        "a.csv": rule(),
+        "new.csv": rule(configured=False),
+    }
     assert seen == {"auth": "Bearer tok", "timeout": 5}
 
 
@@ -492,3 +551,126 @@ def test_column_names_are_quoted(tmp_path):
     save_groups(db, csv, "odd.csv", "kind", **MARK, aggregations=asked)
 
     assert aggregates(db) == [("a", "sum", 'total "net"', 3.0)]
+
+
+def test_decimal_column_counts_as_a_number(tmp_path):
+    parquet = tmp_path / "prices.parquet"
+    with duckdb.connect() as con:
+        con.execute(
+            "COPY (SELECT * FROM (VALUES ('a', 1.25::DECIMAL(10,2)),"
+            " ('a', 2.50::DECIMAL(10,2))) t(kind, price))"
+            f" TO '{parquet}' (FORMAT parquet)"
+        )
+    schema = file_schema(parquet)
+    assert dict(schema)["price"].startswith("DECIMAL")
+    db = tmp_path / "a.duckdb"
+
+    asked = check_aggregations(schema, [{"op": "sum", "column": "price"}])
+    save_groups(db, parquet, "prices.parquet", "kind", **MARK, aggregations=asked)
+
+    assert aggregates(db) == [("a", "sum", "price", 3.75)]
+
+
+# --- a broken rule fails one file, not the sensor ---
+
+
+@pytest.mark.parametrize(
+    "broken", [[{"op": "sum"}], ["sum(clicks)"], {"op": "sum", "column": "x"}]
+)
+def test_broken_rule_does_not_stop_the_other_files(broken):
+    files = {"bad.csv": 5, "good.csv": 5}
+    rules = {"bad.csv": rule(aggregations=()), "good.csv": rule("city")}
+    rules["bad.csv"]["aggregations"] = broken
+
+    todo = pending(files, rules, {})
+
+    # Both are handed on; group_file then fails bad.csv alone.
+    assert [entry["path"] for entry in todo] == ["bad.csv", "good.csv"]
+    with pytest.raises(UploadError):
+        check_aggregations([("x", "BIGINT")], todo[0]["aggregations"])
+
+
+# --- results of renamed and deleted files are dropped ---
+
+
+def results(db, *sources):
+    """Save the same groups under each source; processed_files afterwards."""
+    for source in sources:
+        save_groups(db, db.parent / "orders.csv", source, "city", **MARK)
+    return processed_files(db)
+
+
+def sources_left(db):
+    with duckdb.connect(str(db)) as con:
+        groups = con.execute("SELECT DISTINCT source FROM upload_groups").fetchall()
+        done = con.execute("SELECT source FROM processed_files").fetchall()
+    return sorted(row[0] for row in groups), sorted(row[0] for row in done)
+
+
+def test_results_without_a_saved_rule_are_dropped(orders, tmp_path):
+    db = tmp_path / "a.duckdb"
+    processed = results(db, "kept.csv", "old.csv", "again.csv", "legacy.csv")
+    files = {"kept.csv": 1, "again.csv": 1, "legacy.csv": 1}
+    rules = {
+        "kept.csv": rule("city"),
+        # Deleted and uploaded again under the same name: a draft once more.
+        "again.csv": rule(configured=False),
+    }
+    # old.csv: deleted or renamed, no file and no rule. legacy.csv: a file
+    # with no rule, which the list shows as waiting.
+
+    gone = forget_removed(db, files, rules, processed)
+
+    assert gone == ["again.csv", "legacy.csv", "old.csv"]
+    assert sources_left(db) == (["kept.csv"], ["kept.csv"])
+
+
+def test_empty_listing_deletes_nothing_that_has_a_rule(orders, tmp_path):
+    db = tmp_path / "a.duckdb"
+    processed = results(db, "a.csv", "b.csv")
+    rules = {"a.csv": rule("city"), "b.csv": rule("city")}
+
+    # An unmounted volume or S3 not answering lists nothing at all.
+    assert forget_removed(db, {}, rules, processed) == []
+    assert sources_left(db) == (["a.csv", "b.csv"], ["a.csv", "b.csv"])
+
+
+def test_file_removed_behind_the_apps_back_is_dropped(orders, tmp_path):
+    db = tmp_path / "a.duckdb"
+    processed = results(db, "a.csv", "b.csv")
+    rules = {"a.csv": rule("city"), "b.csv": rule("city")}
+
+    # b.csv was deleted in the S3 console: its rule is still there, but a
+    # listing that is not empty no longer has it.
+    assert forget_removed(db, {"a.csv": 1}, rules, processed) == ["b.csv"]
+    assert sources_left(db) == (["a.csv"], ["a.csv"])
+
+
+def test_forget_removed_does_not_open_the_database_when_nothing_is_gone(
+    tmp_path, monkeypatch
+):
+    def no_connection(*args):
+        raise AssertionError("no write needed")
+
+    monkeypatch.setattr("upload_groups.connect", no_connection)
+
+    assert (
+        forget_removed(
+            tmp_path / "a.duckdb", {"a.csv": 1}, {"a.csv": rule()}, {"a.csv": ()}
+        )
+        == []
+    )
+
+
+def test_sums_are_exact_up_to_2_to_the_53(tmp_path):
+    csv = tmp_path / "big.csv"
+    big = 2**52 + 1
+    csv.write_text(f"kind,amount\na,{big}\na,{big}\n")
+    db = tmp_path / "a.duckdb"
+
+    asked = check_aggregations(file_schema(csv), [{"op": "sum", "column": "amount"}])
+    save_groups(db, csv, "big.csv", "kind", **MARK, aggregations=asked)
+
+    # value is DOUBLE: exact up to 2**53 (README says so); 2 * (2**52 + 1) is
+    # 2**53 + 2, still even, so it survives.
+    assert aggregates(db) == [("a", "sum", "amount", float(2 * big))]

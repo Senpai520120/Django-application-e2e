@@ -5,10 +5,12 @@ from django.utils.translation import gettext_lazy as _
 
 
 class GroupingRule(models.Model):
-    """The column a table file is grouped by in Airflow.
+    """How a table file is grouped in Airflow: the column and the math.
 
-    Airflow reads these rows through the grouping-rules API (views.py) and
-    groups each new file by its rule's column.
+    Airflow reads these rows through the grouping-rules API (views.py). A rule
+    is made as a draft when the file is uploaded; the user then picks the
+    column and the math on the grouping page, and only then does Airflow
+    process the file.
     """
 
     # The file's path inside the file manager, the same one Airflow sees.
@@ -16,9 +18,16 @@ class GroupingRule(models.Model):
     # Empty: Airflow picks the first text column of the file.
     group_by = models.CharField(_("group by column"), max_length=255, blank=True)
     # Math per group, as [{"op": "sum", "column": "clicks"}, ...]; ops come
-    # from files.pipeline.AGGREGATIONS. The columns are checked by Airflow,
-    # which is the one to read the file.
+    # from files.pipeline.AGGREGATIONS, columns from the file itself (the
+    # grouping page offers only those). Airflow checks them again.
     aggregations = models.JSONField(_("aggregations"), default=list, blank=True)
+    # False from the upload until the user saves the grouping page: Airflow
+    # leaves the file alone until then (a table file with no rule at all
+    # waits too), so DuckDB never gets a result by a column nobody chose.
+    configured = models.BooleanField(_("configured"), default=False)
+    # Grows on every save of the grouping page, even with the same choice:
+    # Airflow keeps it with what it did, so saving again retries a failed file.
+    revision = models.PositiveIntegerField(_("revision"), default=0)
     updated_at = models.DateTimeField(_("updated at"), auto_now=True)
 
     class Meta:

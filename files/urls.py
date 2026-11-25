@@ -11,6 +11,7 @@ urlpatterns = [
     path("rename/", views.RenameView.as_view(), name="rename"),
     path("delete/", views.DeleteView.as_view(), name="delete"),
     path("download/", views.DownloadView.as_view(), name="download"),
+    path("grouping/", views.GroupingView.as_view(), name="grouping"),
     path(
         "api/grouping-rules/",
         views.GroupingRulesView.as_view(),

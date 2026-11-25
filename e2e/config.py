@@ -17,6 +17,11 @@ DEMO_PASSWORD = os.getenv("E2E_PASSWORD", "demo-password-123")
 # Must be the same as FILE_MANAGER_MAX_FILE_SIZE of the app (5 MB in docker-compose).
 MAX_FILE_SIZE = int(os.getenv("E2E_MAX_FILE_SIZE", str(5 * 1024 * 1024)))
 
+# Whether the app under test groups table files: PIPELINE_API_TOKEN is set for
+# it (CI sets one in every mode). E2E_GROUPING=0 skips tests/test_grouping.py
+# against a stack without it.
+GROUPING = os.getenv("E2E_GROUPING", "1") == "1"
+
 # Password for users that the tests create. It passes every Django password check.
 NEW_USER_PASSWORD = "E2e-Strong-Pass-42"
 
