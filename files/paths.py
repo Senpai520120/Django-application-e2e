@@ -14,13 +14,16 @@ MAX_NAME_LENGTH = 120
 
 # Separators, control characters, and whatever breaks Windows paths.
 _FORBIDDEN_IN_NAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+# Microsoft's list ("Naming Files, Paths, and Namespaces"): COM1-COM9 and
+# LPT1-LPT9, and the superscript 1-3 too. COM0 and COM10 are ordinary names.
+_DEVICE_DIGITS = [*"123456789", chr(0xB9), chr(0xB2), chr(0xB3)]
 _WINDOWS_RESERVED = {
     "CON",
     "PRN",
     "AUX",
     "NUL",
-    *(f"COM{i}" for i in range(1, 10)),
-    *(f"LPT{i}" for i in range(1, 10)),
+    *(f"COM{digit}" for digit in _DEVICE_DIGITS),
+    *(f"LPT{digit}" for digit in _DEVICE_DIGITS),
 }
 _DRIVE_LETTER = re.compile(r"^[a-zA-Z]:")
 
@@ -51,10 +54,8 @@ def clean_name(name: str) -> str:
     if any(unicodedata.category(char) in ("Cc", "Cf") for char in name):
         raise SuspiciousFileOperation("The name contains invisible characters.")
 
-    # ".", ".." and leading dots: either a way out or invisible clutter.
-    if name.strip(".") == "":
-        raise SuspiciousFileOperation("Name is not allowed.")
-
+    # ".", ".." and leading or trailing dots: either a way out or invisible
+    # clutter. Nothing left means the name was only dots and spaces.
     name = name.strip(". ")
     if not name:
         raise SuspiciousFileOperation("Name is not allowed.")
@@ -115,7 +116,8 @@ def join_path(path: str, name: str) -> str:
     """Path to a nested item: clean the name first, then join."""
     parent = normalize_path(path)
     child = clean_name(name)
-    return posixpath.join(parent, child) if parent else child
+    # join("", child) is just child, so the root needs no special case.
+    return posixpath.join(parent, child)
 
 
 def parent_path(path: str) -> str:
@@ -135,6 +137,6 @@ def breadcrumbs(path: str) -> list[tuple[str, str]]:
     crumbs: list[tuple[str, str]] = []
     walked = ""
     for part in normalized.split("/"):
-        walked = posixpath.join(walked, part) if walked else part
+        walked = posixpath.join(walked, part)
         crumbs.append((part, walked))
     return crumbs
