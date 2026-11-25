@@ -487,7 +487,11 @@ What is covered:
 * `tests/test_seed_demo_users.py` — demo users are created with the right roles
   and flags, the command is idempotent, `--delete` leaves other accounts alone,
   and with `DEBUG=False` it refuses to run without `--force`;
-* `tests/test_files_paths.py` — path traversal in every shape, name sanitisation;
+* `tests/test_files_paths.py` — path traversal in every shape, name sanitisation,
+  the exact reason given for each rejection;
+* `tests/test_files_forms.py` — the file manager forms on their own: size limits
+  at the exact byte, a browser sending a whole path as the file name, the
+  grouping page's starting choice;
 * `tests/test_files_storage.py` — **the storage contract, run twice**: against
   the local disk and against S3 through `moto`. The same set of checks, two
   different implementations;
@@ -498,10 +502,94 @@ What is covered:
   sign-out ending the Keycloak session;
 * `tests/test_keycloak_admin.py` — the Admin API calls with HTTP faked:
   accounts made with the Django password hash, password changes, Keycloak
-  being down.
+  being down;
+* `tests/test_mutants_to_sonar.py` — the mutation report converter (see
+  [Mutation testing](#mutation-testing)).
 
 The test environment lives in `config/settings_test.py`; the user fixtures are in
 `tests/conftest.py`.
+
+## Mutation testing
+
+Coverage says which lines the tests *run*; mutation testing says whether they
+would *notice* if those lines were wrong. [mutmut](https://github.com/boxed/mutmut)
+makes hundreds of small changes to the code, one at a time — `>` into `>=`,
+`and` into `or`, `"admin"` into `"XXadminXX"`, a return value into `None` — and
+runs the unit tests against each changed copy, a *mutant*. A mutant that makes
+some test fail is **killed**; one that every test lets through **survived** and
+points at a check nobody verifies. For example, `files/paths.py` used to pass
+every test after `len(name) > MAX_NAME_LENGTH` became `>= MAX_NAME_LENGTH`: no
+test tried a name of exactly the maximum length, so one was added.
+
+Only the code where a missed bug costs most is mutated (`[tool.mutmut]` in
+`pyproject.toml`): path and name checks (`files/paths.py`), upload and
+grouping forms (`files/forms.py`, `files/pipeline.py`), the grouping itself
+(`airflow/dags/upload_groups.py`) and `accounts/permissions.py`. The tests are
+the unit tests in `tests/`; E2E never runs.
+
+mutmut 3 forks processes in a way Windows lacks, so it runs in a Linux container.
+From the project root (PowerShell or bash):
+
+```bash
+docker run --rm -v "${PWD}:/repo" python:3.12-slim sh /repo/scripts/run_mutation.sh
+```
+
+`scripts/run_mutation.sh` copies the project into the container, runs
+`mutmut run`, then `scripts/mutants_to_sonar.py`, which prints the score and
+writes `mutation-report.json`:
+
+```
+Mutation score: 815/983 caught = 82.9%
+  accounts/permissions.py             killed       18
+  airflow/dags/upload_groups.py       killed       425
+  airflow/dags/upload_groups.py       survived     74
+  files/forms.py                      killed       173
+  files/forms.py                      survived     62
+  files/paths.py                      killed       136
+  files/paths.py                      survived     20
+  ...
+```
+
+The **mutation score** is caught / tested mutants. A timeout counts as caught
+(the mutant made the code hang and the run noticed). 100% is not the goal: some
+mutants are *equivalent*: they change nothing observable and cannot be killed.
+`name.split(".", 1)[0]` and `name.split(".", 2)[0]` give the same first part,
+for instance.
+
+To look at one mutant, start the container with `-it ... bash` instead, run
+the script's commands by hand, then `mutmut results` and `mutmut show <name>`.
+`mutmut` itself is in `requirements-dev.txt` for Linux only; on Windows only
+the container route works.
+
+**In SonarQube.** SonarQube has no Python mutation plugin, so the report uses
+its [generic issue format](https://docs.sonarsource.com/sonarqube-server/latest/analyzing-source-code/importing-external-issues/generic-issue-import-format/):
+one issue per mutant that survived or that no test reaches, on the mutated line,
+with a message like
+
+```
+Mutant survived: every unit test still passes after
+'stem = name.split(".", 1)[0].upper()' -> 'stem = name.split(".", 2)[0].upper()'
+```
+
+(that one is the equivalent mutant above). Pass the report to the scanner with
+
+```
+-Dsonar.externalIssuesReportPaths=mutation-report.json
+```
+
+and the issues show up in the project under the rule
+`external_mutmut:survived-mutant` (Maintainability, medium).
+
+Most of what survives is equivalent or cosmetic: a changed default for an
+environment variable the tests always set, a form label, a SQL keyword in
+another case. The first run scored 70.7%; the tests added after it (exact
+error texts, the length limit at its edge, a quote inside an S3 key, a waiting
+file ahead of a ready one, `docs/../other`) brought it to 82.9%.
+
+A run takes about seven minutes on a 12-core machine (two for `pip install`,
+five for 983 mutants), and every changed line of code shifts the result. So it
+stays a check you run by hand before touching the mutated files, not a CI job
+that would slow down every pull request.
 
 ## Sign-in through Keycloak (SSO)
 
@@ -1024,6 +1112,7 @@ files/            the file manager at /files/
   models.py         GroupingRule: the column each table file is grouped by
   pipeline.py       which uploads are grouped in Airflow
 airflow/          the Airflow image and the watch_uploads DAG
+scripts/          mutation testing: the run script and the SonarQube converter
 e2e/              pytest + Playwright: scenarios in a browser
 deploy/aws/       Terraform: S3, IAM role, EC2
 templates/        base.html, registration/login.html, the panel, 403/404/500
