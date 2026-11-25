@@ -77,8 +77,10 @@ BAD_NAMES = [
     "star*name",
     "a" * (MAX_NAME_LENGTH + 1),
     # Shown as "photoexe.jpg": the right-to-left override hides the extension.
-    "photo" + chr(0x202E) + "gpj.exe",
-    "zero" + chr(0x200B) + "width.txt",
+    # Escapes, not the characters themselves: invisible characters in source
+    # code are a trap of their own (CWE-1007, the "trojan source" attack).
+    "photo\u202egpj.exe",
+    "zero\u200bwidth.txt",
     "del\x7f.txt",
 ]
 

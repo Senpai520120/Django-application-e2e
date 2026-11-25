@@ -7,7 +7,8 @@
 
   <div class="toolbar">
     <form method="get" class="inline">
-      <input type="search" name="q" value="{{ q }}" placeholder="username, email, name">
+      <label for="id_q" class="visually-hidden">Search users</label>
+      <input type="search" id="id_q" name="q" value="{{ q }}" placeholder="username, email, name">
       <button type="submit">Search</button>
       {% if q %}<a href="{% url 'panel:user_list' %}">Reset</a>{% endif %}
     </form>
