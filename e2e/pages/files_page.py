@@ -78,6 +78,10 @@ class FilesPage(BasePage):
         """ "Grouping" next to a table file; other files have none."""
         return self.page.get_by_role("link", name=f"Grouping {name}", exact=True)
 
+    def results_link(self, name: str):
+        """ "Results" next to a table file, when the app reads Airflow's DuckDB."""
+        return self.page.get_by_role("link", name=f"Results {name}", exact=True)
+
     def grouping_status(self, name: str):
         """The line next to a table file's name: "by category, sum(qty)"."""
         return self.entry_row(name).get_by_test_id("grouping-status")

@@ -22,6 +22,11 @@ MAX_FILE_SIZE = int(os.getenv("E2E_MAX_FILE_SIZE", str(5 * 1024 * 1024)))
 # against a stack without it.
 GROUPING = os.getenv("E2E_GROUPING", "1") == "1"
 
+# Whether the app under test has the Results page: DUCKDB_PATH is set for it
+# (CI sets one in every mode; the file itself needs no Airflow). E2E_RESULTS=0
+# skips tests/test_results.py against a stack without it.
+RESULTS = GROUPING and os.getenv("E2E_RESULTS", "1") == "1"
+
 # Password for users that the tests create. It passes every Django password check.
 NEW_USER_PASSWORD = "E2e-Strong-Pass-42"
 
