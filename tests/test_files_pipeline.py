@@ -66,8 +66,33 @@ def test_schema_of_a_broken_file_is_a_schema_error():
 
 
 def test_schema_only_for_table_files():
-    with pytest.raises(pipeline.SchemaError):
+    with pytest.raises(pipeline.SchemaError) as caught:
         pipeline.file_schema(FakeStorage({"a.txt": b"x"}), "a.txt")
+    assert str(caught.value) == "Not a table file."
+
+
+def test_duckdb_reads_a_copy_with_the_original_extension(monkeypatch):
+    read = []
+    real_connect = pipeline.duckdb.connect
+
+    class Spy:
+        def __enter__(self):
+            self.con = real_connect()
+            return self
+
+        def __exit__(self, *exc):
+            self.con.close()
+            return False
+
+        def execute(self, sql, params):
+            read.append(params[0])
+            return self.con.execute(sql, params)
+
+    monkeypatch.setattr(pipeline.duckdb, "connect", lambda: Spy())
+
+    pipeline.file_schema(FakeStorage({"r/Sales.CSV": b"a\n1\n"}), "r/Sales.CSV")
+
+    assert read[0].endswith(".csv")
 
 
 @pytest.mark.parametrize(
@@ -123,8 +148,15 @@ def test_duckdb_error_with_no_message_still_explains(monkeypatch):
 
     monkeypatch.setattr(pipeline.duckdb, "connect", lambda: Silent())
 
-    with pytest.raises(pipeline.SchemaError, match="DuckDB cannot read the file"):
+    with pytest.raises(pipeline.SchemaError) as caught:
         pipeline.file_schema(FakeStorage({"a.csv": b"x\n1\n"}), "a.csv")
+    assert str(caught.value) == "DuckDB cannot read the file."
+
+
+def test_storage_error_with_no_message_still_explains():
+    with pytest.raises(pipeline.SchemaError) as caught:
+        pipeline.file_schema(FailingStorage(StorageError("")), "seo.csv")
+    assert str(caught.value) == "The file could not be read."
 
 
 def test_broken_aggregations_are_described_without_failing():

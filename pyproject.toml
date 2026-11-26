@@ -42,6 +42,23 @@ fail_under = 90
 skip_covered = true
 exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError"]
 
+[tool.mutmut]
+# Mutation testing (see README, "Mutation testing"). mutmut copies source_paths
+# into mutants/ so Django can import every app, but changes only the files in
+# only_mutate: the path, upload and pipeline checks where a weak test costs most.
+source_paths = ["accounts", "config", "files", "panel", "airflow/dags"]
+only_mutate = [
+    "files/paths.py",
+    "files/forms.py",
+    "files/pipeline.py",
+    "airflow/dags/upload_groups.py",
+    "accounts/permissions.py",
+]
+also_copy = ["tests", "templates", "static", "manage.py", "scripts"]
+pytest_add_cli_args_test_selection = ["tests"]
+# Instead of airflow/dags: see scripts/mutmut_shims/upload_groups.py.
+pytest_add_cli_args = ["-o", "pythonpath=scripts/mutmut_shims"]
+
 [tool.pyright]
 # e2e/ is a separate import root: there `config` is e2e/config.py (the test
 # settings), not the Django project package, the same as when pytest runs it.

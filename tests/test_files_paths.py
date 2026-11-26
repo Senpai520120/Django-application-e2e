@@ -16,6 +16,8 @@ TRAVERSAL_PATHS = [
     "../etc/passwd",
     "../../etc/passwd",
     "docs/../../etc/passwd",
+    # Stays inside the root once normalised, but ".." is refused on sight.
+    "docs/../other",
     "docs/../..",
     "/etc/passwd",
     "//etc/passwd",
@@ -126,3 +128,86 @@ def test_breadcrumbs_walk_from_root():
         ("2024", "docs/2024"),
         ("q1", "docs/2024/q1"),
     ]
+
+
+# The reason reaches the user as a form error, so it has to be the right one.
+REJECTION_REASONS = [
+    (clean_name, 42, "The name must be a string."),
+    (clean_name, "a\x00b", "The name contains a null byte."),
+    (clean_name, "   ", "Empty name."),
+    (clean_name, "a:b", "The name contains forbidden characters."),
+    (
+        clean_name,
+        "photo" + chr(0x202E) + "gpj.exe",
+        "The name contains invisible characters.",
+    ),
+    (clean_name, "..", "Name is not allowed."),
+    (clean_name, ". .", "Name is not allowed."),
+    (clean_name, "nul.tar.gz", "The name 'nul.tar.gz' is reserved by the system."),
+    (
+        clean_name,
+        "a" * (MAX_NAME_LENGTH + 1),
+        f"The name is longer than {MAX_NAME_LENGTH} characters.",
+    ),
+    (normalize_path, 42, "The path must be a string."),
+    (normalize_path, "docs/\x00", "The path contains a null byte."),
+    (normalize_path, "/etc", "Absolute paths are not allowed."),
+    (normalize_path, "docs/../..", "Escaping the storage root is forbidden."),
+]
+
+
+@pytest.mark.parametrize(("check", "value", "reason"), REJECTION_REASONS)
+def test_rejection_says_why(check, value, reason):
+    with pytest.raises(SuspiciousFileOperation) as caught:
+        check(value)
+    assert str(caught.value) == reason
+
+
+def test_name_of_exactly_the_maximum_length_is_kept():
+    name = "a" * MAX_NAME_LENGTH
+    assert clean_name(name) == name
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # Only dots and spaces are trimmed from the ends, nothing else.
+        ("XML report.", "XML report"),
+        ("console.log", "console.log"),  # starts like CON, but is not CON
+        ("con-notes.txt", "con-notes.txt"),
+    ],
+)
+def test_trimming_and_reserved_names_stop_where_they_should(raw, expected):
+    assert clean_name(raw) == expected
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "COM1",
+        "com9.txt",
+        "LPT9.log",
+        *("COM" + chr(code) for code in (0xB9, 0xB2, 0xB3)),
+        *("lpt" + chr(code) + ".txt" for code in (0xB9, 0xB2, 0xB3)),
+    ],
+)
+def test_every_windows_device_name_is_reserved(name):
+    with pytest.raises(SuspiciousFileOperation, match="reserved by the system"):
+        clean_name(name)
+
+
+@pytest.mark.parametrize("name", ["COM0.txt", "COM10.txt", "LPT0", "LPT10.log"])
+def test_device_names_stop_at_nine(name):
+    assert clean_name(name) == name
+
+
+def test_names_are_limited_to_120_characters():
+    # The limit itself, not only the constant: a changed constant shows here.
+    assert clean_name("a" * 120) == "a" * 120
+    with pytest.raises(SuspiciousFileOperation):
+        clean_name("a" * 121)
+
+
+def test_a_part_that_sorts_before_dots_is_kept():
+    # "-" sorts before "." and ".."; only ".." itself is refused.
+    assert normalize_path("-docs/a") == "-docs/a"

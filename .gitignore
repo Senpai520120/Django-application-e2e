@@ -37,3 +37,7 @@ auth.json
 
 # Airflow passwords file (generated, never commit)
 airflow/passwords.json
+
+# mutmut working copy and the SonarQube report built from it
+mutants/
+mutation-report.json
