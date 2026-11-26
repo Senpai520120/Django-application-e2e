@@ -4,7 +4,8 @@
 # The watch_uploads DAG looks for new uploads by itself every 30 s and reads
 # each file's column from the app (GET /files/api/grouping-rules/ with
 # PIPELINE_API_TOKEN); the app never calls Airflow.
-# Results: the upload_groups table in the DuckDB file on the analytics volume.
+# Results: one table per file, result_<rule id>, in the DuckDB file on the
+# analytics volume; the app shows it on the file's Results page.
 # Works with either storage: FILE_STORAGE_BACKEND and the bucket settings come
 # from .env, the same ones the app uses, so in s3 mode Airflow reads the bucket
 # (with its own read-only keys, see AIRFLOW_AWS_* below).
@@ -75,6 +76,11 @@ services:
       PIPELINE_API_TOKEN: ${PIPELINE_API_TOKEN:-}
       # Airflow reaches the app by its service name, "web".
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1,[::1]},web
+      # The Results page reads Airflow's DuckDB file.
+      DUCKDB_PATH: /data/analytics/analytics.duckdb
+    volumes:
+      # Read-only: Airflow is the one writer of the results.
+      - analytics:/data/analytics:ro
 
 volumes:
   analytics:

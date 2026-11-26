@@ -39,6 +39,7 @@ from files.pipeline import (
     processing_enabled,
     should_process,
 )
+from files.results import MAX_ROWS, read_result, results_enabled
 from files.storage import StorageError, get_storage
 from files.uploads import oversized_uploads
 
@@ -113,6 +114,16 @@ class FileManagerMixin(FileManagerAccessMixin):
     def redirect_to(self, path: str):
         return redirect(browse_url(path))
 
+    def require_table_file(self) -> None:
+        """404 unless the path is a table file that exists."""
+        if (
+            not self.path
+            or not is_table(self.path)
+            or not self.storage.exists(self.path)
+            or self.storage.is_dir(self.path)
+        ):
+            raise Http404("No such table file.")
+
 
 class BrowseView(FileManagerMixin, TemplateView):
     template_name = "files/browse.html"
@@ -156,6 +167,7 @@ class BrowseView(FileManagerMixin, TemplateView):
             backend=self.storage.__class__.__name__,
             max_file_size=filesizeformat(settings.FILE_MANAGER["MAX_FILE_SIZE"]),
             table_formats=TABLE_FORMATS if grouping else (),
+            results_on=results_enabled(),
             aggregation_ops=AGGREGATIONS,
         )
         return context
@@ -379,13 +391,7 @@ class GroupingView(FileManagerMixin, FormView):
         """Find the file and read its columns; a response if that fails."""
         if not processing_enabled():
             raise Http404("Grouping is off.")
-        if (
-            not self.path
-            or not is_table(self.path)
-            or not self.storage.exists(self.path)
-            or self.storage.is_dir(self.path)
-        ):
-            raise Http404("No such table file.")
+        self.require_table_file()
         try:
             self.schema = file_schema(self.storage, self.path)
         except SchemaError as error:
@@ -471,6 +477,48 @@ class GroupingView(FileManagerMixin, FormView):
             grouping_message(self.path.rsplit("/", 1)[-1], group_by, aggregations),
         )
         return self.redirect_to(parent_path(self.path))
+
+
+class ResultsView(FileManagerMixin, TemplateView):
+    """What Airflow computed for a table file: its result table from DuckDB.
+
+    Read on every visit, so a refresh shows the latest. Only a result of the
+    file's current rule is shown (see files.results), never one left from an
+    earlier choice.
+    """
+
+    template_name = "files/results.html"
+
+    # As on the grouping page: checks in get(), after the sign-in check.
+    def get(self, request, *args, **kwargs):
+        if not results_enabled():
+            raise Http404("Results are off.")
+        self.require_table_file()
+        context = self.get_context_data(**kwargs)
+        response = self.render_to_response(context)
+        result = context["result"]
+        if result is not None and result.state == "busy":
+            # Airflow is writing: try again in a moment, says the page too.
+            response.status_code = 503
+            response.headers["Retry-After"] = "5"
+        return response
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        rule = GroupingRule.objects.filter(path=self.path).first()
+        configured = rule is not None and rule.configured
+        context.update(
+            path=self.path,
+            name=self.path.rsplit("/", 1)[-1],
+            back_url=browse_url(parent_path(self.path)),
+            grouping_url=grouping_url(self.path),
+            rule=rule,
+            summary=grouping_summary(rule),
+            # No rule or a draft: nothing was asked for, nothing to read.
+            result=read_result(rule) if configured else None,
+            max_rows=MAX_ROWS,
+        )
+        return context
 
 
 class GroupingRulesView(View):

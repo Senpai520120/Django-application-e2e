@@ -246,6 +246,10 @@ AWS_QUERYSTRING_AUTH = True
 # (docker-compose.airflow.yml). Airflow sends this token to read the grouping
 # rules; left empty, the rules API is off and uploads are only stored.
 PIPELINE_API_TOKEN = env("PIPELINE_API_TOKEN", default="")
+# Airflow's DuckDB file with the results, which the Results page of a table
+# file shows. The app only reads it; docker-compose.airflow.yml mounts it
+# read-only. Left empty, there is no Results page.
+DUCKDB_PATH = env("DUCKDB_PATH", default="")
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 

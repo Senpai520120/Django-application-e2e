@@ -120,6 +120,10 @@ books,Solaris,9</pre>
               {% if row.table %}
                 <a href="{% url 'files:grouping' %}?path={{ entry.path|urlencode }}"
                    aria-label="Grouping {{ entry.name }}">Grouping</a>
+                {% if results_on %}
+                  <a href="{% url 'files:results' %}?path={{ entry.path|urlencode }}"
+                     aria-label="Results {{ entry.name }}">Results</a>
+                {% endif %}
               {% endif %}
             </td>
           </tr>
