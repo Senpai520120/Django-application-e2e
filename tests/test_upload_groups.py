@@ -4,6 +4,7 @@ import io
 import json
 import os
 from decimal import Decimal
+from pathlib import Path
 
 import boto3
 import duckdb
@@ -13,6 +14,7 @@ from upload_groups import (
     UploadError,
     aggregations_key,
     check_aggregations,
+    connect,
     fetch_rules,
     file_columns,
     file_schema,
@@ -24,6 +26,7 @@ from upload_groups import (
     pick_column,
     pick_group_column,
     processed_files,
+    reader,
     resolve_upload,
     result_columns,
     s3_secret,
@@ -221,6 +224,24 @@ def test_s3_secret_matches_the_app_settings():
     assert "ENDPOINT" not in secret
 
 
+def test_s3_secret_quotes_values_and_needs_both_keys():
+    # CREATE SECRET takes no parameters: a quote in a value must stay text.
+    secret = s3_secret(
+        {
+            **S3_ENV,
+            "AWS_SECRET_ACCESS_KEY": "it's",
+            "AWS_S3_ENDPOINT_URL": "https://s3.example.com",
+        }
+    )
+    assert "SECRET 'it''s'" in secret
+    assert "USE_SSL true" in secret
+
+    # One key of the pair is not enough to sign requests.
+    half = {**S3_ENV, "AWS_SECRET_ACCESS_KEY": ""}
+    assert "PROVIDER credential_chain" in s3_secret(half)
+    assert "KEY_ID" not in s3_secret(half)
+
+
 def test_default_group_column_is_the_first_text_one(tmp_path):
     csv = tmp_path / "orders.csv"
     csv.write_text("id,amount,customer,city\n1,10.5,ann,Kyiv\n2,7.0,bob,Lviv\n")
@@ -351,6 +372,10 @@ def test_saved_file_is_marked_done(store, tmp_path):
 
     done = processed_files(db)
     assert done == {"reports/sales.csv": (7, "", aggregations_key(asked), 0, 1)}
+    with duckdb.connect(str(db)) as con:
+        assert con.execute("SELECT status, error FROM processed_files").fetchall() == [
+            ("done", None)
+        ]
     assert (
         pending({"reports/sales.csv": 7}, {"reports/sales.csv": rule("", asked)}, done)
         == []
@@ -427,6 +452,13 @@ def test_draft_rule_and_no_rule_make_the_file_wait():
     # renamed.csv has no rule (it was a .txt): nobody chose its column, so it
     # waits like a draft instead of going by the first text column.
     assert [entry["path"] for entry in todo] == ["chosen.csv"]
+
+
+def test_a_waiting_file_does_not_hold_up_the_ones_after_it():
+    files = {"a-draft.csv": 5, "b-no-rule.csv": 5, "c-chosen.csv": 5}
+    rules = {"a-draft.csv": rule(configured=False), "c-chosen.csv": rule("city")}
+
+    assert [entry["path"] for entry in pending(files, rules, {})] == ["c-chosen.csv"]
 
 
 def test_draft_saved_later_is_processed():
@@ -861,3 +893,134 @@ def test_opening_gives_up_on_other_errors_and_after_the_wait(tmp_path, monkeypat
     monkeypatch.setattr("upload_groups.LOCK_WAIT_SECONDS", 0)
     with pytest.raises(duckdb.IOException, match="lock"):
         processed_files(tmp_path / "a.duckdb")
+
+
+# Edges the mutation runs showed unchecked: defaults, exact texts, and the
+# bits of the stable key the sensor compares against what was done.
+
+
+def test_defaults_when_the_settings_are_left_out():
+    assert filestore_root({}) == "/data/filestore"
+    s3 = {"FILE_STORAGE_BACKEND": "s3", "AWS_STORAGE_BUCKET_NAME": "uploads"}
+    assert filestore_root(s3) == "s3://uploads/filemanager"
+    assert filestore_root({**s3, "FILE_MANAGER_S3_LOCATION": "/nested/"}) == (
+        "s3://uploads/nested"
+    )
+    with pytest.raises(UploadError) as caught:
+        filestore_root({"FILE_STORAGE_BACKEND": "s3"})
+    assert str(caught.value) == (
+        "FILE_STORAGE_BACKEND=s3 needs AWS_STORAGE_BUCKET_NAME."
+    )
+    # No keys, no region: the instance role in the default region.
+    assert s3_secret(s3) == (
+        "CREATE SECRET (TYPE s3, REGION 'eu-central-1', PROVIDER credential_chain)"
+    )
+
+
+def test_settings_given_are_the_ones_used():
+    assert filestore_root({"FILESTORE_ROOT": "/srv/uploads"}) == "/srv/uploads"
+    s3 = {"FILE_STORAGE_BACKEND": "s3", "AWS_STORAGE_BUCKET_NAME": "uploads"}
+    # Only slashes are trimmed from the prefix, not the letters next to them.
+    assert filestore_root({**s3, "FILE_MANAGER_S3_LOCATION": "Xbox/"}) == (
+        "s3://uploads/Xbox"
+    )
+    assert "REGION 'us-east-1'" in s3_secret(S3_ENV)
+    assert resolve_upload("s3://uploads/X/", "a.csv") == "s3://uploads/X/a.csv"
+
+
+def test_connect_without_a_file_stays_in_memory(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with connect() as con:
+        con.execute("CREATE TABLE t (x INTEGER)")
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_s3_root_with_a_trailing_slash_gives_one_slash():
+    assert resolve_upload("s3://uploads/filemanager/", "r/a.csv") == (
+        "s3://uploads/filemanager/r/a.csv"
+    )
+
+
+@pytest.mark.parametrize(
+    ("path", "message"),
+    [
+        ("../secret.csv", "Bad path: '../secret.csv'"),
+        # Refused as a path, before it is even looked up on disk.
+        ("/etc/passwd", "Bad path: '/etc/passwd'"),
+        ("missing.csv", "No such file: 'missing.csv'"),
+    ],
+)
+def test_bad_upload_path_says_which(store, path, message):
+    with pytest.raises(UploadError) as caught:
+        resolve_upload(store, path)
+    assert str(caught.value) == message
+
+
+def test_root_with_a_trailing_slash_lists_the_same_names(tmp_path):
+    # An X at both ends of a name: only "/" and "\\" are trimmed, nothing else.
+    root = tmp_path / "uploadsX"
+    root.mkdir()
+    (root / "Xray.csv").write_text(SALES)
+
+    assert list(list_table_files(f"{root}/")) == ["Xray.csv"]
+
+
+def test_aggregations_key_is_stable_text():
+    asked = [{"op": "sum", "column": "clicks", "note": "ignored"}]
+    assert aggregations_key(asked) == '[{"column":"clicks","op":"sum"}]'
+    # Broken rules still give a key instead of raising.
+    assert aggregations_key("sum:clicks") == json.dumps(repr("sum:clicks"))
+    assert aggregations_key(["sum"]) == json.dumps([repr("sum")])
+
+
+def test_rules_from_before_drafts_and_revisions_count_as_final():
+    old_rule = {"id": 1, "group_by": "city", "aggregations": []}
+
+    assert pending({"a.csv": 5}, {"a.csv": old_rule}, {}) == [
+        item("a.csv", group_by="city")
+    ]
+    done = {"a.csv": (5, "city", "[]", 0, 1)}
+    assert pending({"a.csv": 5}, {"a.csv": old_rule}, done) == []
+    # Its result stays: there is a final rule behind it.
+    rules = {"a.csv": old_rule}
+    assert forget_removed(Path("unused.duckdb"), {"a.csv": 5}, rules, done) == []
+
+
+def test_exact_reasons_for_refusing_a_file_or_its_math():
+    with pytest.raises(UploadError) as caught:
+        reader("notes.txt")
+    assert str(caught.value) == "Not a table file: 'notes.txt'"
+
+    with pytest.raises(UploadError) as caught:
+        pick_column([], None)
+    assert str(caught.value) == "The file has no columns."
+
+    with pytest.raises(UploadError) as caught:
+        check_aggregations([("qty", "BIGINT")], "sum:qty")
+    assert str(caught.value) == "Bad aggregations 'sum:qty'; expected a list."
+
+    with pytest.raises(UploadError) as caught:
+        check_aggregations([("qty", "BIGINT")], ["sum"])
+    assert str(caught.value) == "Bad aggregation 'sum'; expected op and column."
+
+
+def test_s3_secret_is_none_without_any_storage_setting():
+    assert s3_secret({}) is None
+
+
+def test_a_file_name_that_sorts_before_the_slash_is_fine(store):
+    # "-" sorts before "/": only a leading "/" makes a path absolute.
+    (store / "-sales.csv").write_text(SALES)
+    assert resolve_upload(store, "-sales.csv").endswith("-sales.csv")
+
+
+def test_a_list_of_texts_is_not_the_group_column():
+    schema = [("tags", "VARCHAR[]"), ("city", "VARCHAR")]
+    assert pick_group_column(schema, None) == "city"
+
+
+def test_a_new_file_is_not_forgotten(tmp_path):
+    rules = {"a.csv": rule(), "new.csv": rule()}
+    done = {"a.csv": (5, "", "[]", 0, 1)}
+    files = {"a.csv": 5, "new.csv": 5}
+    assert forget_removed(tmp_path / "a.duckdb", files, rules, done) == []
