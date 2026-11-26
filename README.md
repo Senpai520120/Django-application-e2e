@@ -298,9 +298,10 @@ Every line above is covered by tests: `tests/test_files_paths.py`,
 
 A `.csv`, `.xlsx`, `.json` or `.parquet` file uploaded through the file manager
 is grouped by a column the user picks, optionally with math per group (sum,
-avg, min, max, count), and the result lands in DuckDB. The app never calls
-Airflow: Airflow watches the uploads itself and asks the app only how each file
-is processed.
+avg, min, max, count), and the result lands in DuckDB, in a table of the
+file's own, which the app shows on the file's **Results** page. The app never
+calls Airflow: Airflow watches the uploads itself and asks the app only how each
+file is processed.
 
 ```
 Upload form (files)
@@ -314,10 +315,14 @@ Airflow, DAG watch_uploads (airflow/dags/watch_uploads.py), always running:
                   - what processed_files in DuckDB already has
                   = new files, changed files, files with a new rule
                     (a draft waits until the user saves its grouping)
-    group_file    one mapped task per file, one at a time:
-                    GROUP BY the column -> upload_groups,
-                    each aggregation per group -> upload_aggregates,
-                    mark in processed_files
+    group_file    one mapped task per file, one at a time, in one transaction:
+                    CREATE OR REPLACE TABLE result_<rule id> AS
+                      SELECT <column>, count(*) AS row_count, sum(...) AS sum_..., ...
+                      GROUP BY 1
+                    + mark in processed_files (rule id, revision, done/failed)
+The Results page (/files/results/?path=...), back in the app:
+    reads processed_files and result_<rule id> from the same DuckDB file,
+    read-only, and shows the table if it answers the file's current rule
 ```
 
 ```bash
@@ -362,17 +367,18 @@ docker compose -f docker-compose.yml -f docker-compose.airflow.yml up -d --build
 * A file the app cannot read as a table (a broken `.parquet`, no columns) gets
   a page that says so instead of the form; its rule stays a draft.
 * The rules API, `GET /files/api/grouping-rules/`, answers
-  `[{"path": ..., "group_by": ..., "aggregations": [{"op": ..., "column": ...}],
+  `[{"id": 7, "path": ..., "group_by": ..., "aggregations": [{"op": ..., "column": ...}],
   "configured": true, "revision": 1}]` only to `Authorization: Bearer
   <PIPELINE_API_TOKEN>`; without the token it is 401, and with no
   `PIPELINE_API_TOKEN` set it does not exist (404) and uploads are only saved.
   The same token is set for the app and for Airflow in
   `docker-compose.airflow.yml`; Airflow reaches the app at `http://web:8000`.
 * `processed_files` in DuckDB is the sensor's memory: one row per file with its
-  modification time, the rule's column, aggregations and revision, and `done`
-  or `failed`. A database made before aggregations or revisions gets the
-  columns added on the first look, with `[]` and `0` for the old rows, so they
-  are not redone. A file is taken
+  modification time, the rule's id, column, aggregations and revision, and
+  `done` or `failed`. A database made before aggregations or revisions gets the
+  columns added on the first look, with `[]` and `0` for the old rows. Rows
+  from before rule ids have none (`NULL`), so each of those files is processed
+  once more, into a table of its own. A file is taken
   again only when one of those changes. A file that cannot be grouped (no such
   column, a broken file) is marked `failed` with the error, its task goes red
   once, and it is not retried until it is uploaded again or its grouping page
@@ -417,15 +423,31 @@ docker compose -f docker-compose.yml -f docker-compose.airflow.yml up -d --build
   ```
 * `PIPELINE_API_TOKEN` and `AIRFLOW_ADMIN_PASSWORD` come from `.env`; the
   Airflow container does not start without them.
-* Table `upload_groups`: `source` (the file's path), `group_column`,
-  `group_value`, `row_count`, `processed_at`.
-* Table `upload_aggregates`, one row per group and aggregation: `source`,
-  `group_column`, `group_value`, `op`, `value_column`, `value` (`DOUBLE`),
-  `processed_at`. A long table, so one schema fits any set of aggregations.
-* A file processed again replaces its own rows in both tables in one
-  transaction, so nothing is counted twice.
-* A result lives only while its file has a saved rule. On its next look the
-  sensor drops the rows of a path with no configured rule: a deleted or renamed
+* **A table per file, `result_<rule id>`.** Files have different columns, so
+  each gets a wide table of its own: one row per group, the group column,
+  `row_count`, then one column per math in the order chosen, named
+  `<op>_<column>` (`sum_amount`, `avg_qty`), with DuckDB's own types (a sum of
+  whole numbers stays an exact `HUGEINT`, a group of dates stays a `DATE`).
+  `CREATE OR REPLACE` writes it anew on every processing, so a new choice of
+  math gives the table a new shape and nothing is counted twice.
+* The name comes from the rule's id, never from the path: a path can hold any
+  character, and the id stays when the file is renamed. A file with no rule
+  (renamed from `.txt`, uploaded while grouping was off) has no id and so no
+  table, and a draft is skipped; saving the grouping page makes both a rule
+  and, on the next look, the table.
+* **Names never clash.** A name already taken gets `_2`, `_3`, ... in column
+  order, compared without case as DuckDB does: a file with its own `row_count`
+  column grouped by it gives `row_count, row_count_2`. Every name is quoted.
+* The first version kept two shared long tables, `upload_groups` and
+  `upload_aggregates`. Nothing reads them any more, so the first write of the
+  new DAG drops them; the rows come back as `result_<id>` tables when each
+  file is processed once more (see `processed_files` above).
+* A result lives only while its file has a saved rule. A `result_<id>` table
+  exists only while a `done` row of `processed_files` points at it, and both
+  change in one transaction: a failed file, or a file deleted and uploaded
+  again under the same name (a new rule, a new id), loses its old table. On
+  its next look the sensor drops the rows and tables of a path with no
+  configured rule: a deleted or renamed
   file (the rule goes or moves with it), a file uploaded again under the same
   name (a draft again), a table file with no rule that the list shows as
   waiting. One **Save** brings them back from the file. The store's listing
@@ -437,10 +459,38 @@ docker compose -f docker-compose.yml -f docker-compose.airflow.yml up -d --build
 * A rule broken by hand (an aggregation without a column, not a list) fails
   only its own file, marked `failed`; the sensor goes on with the rest.
 
-Looking at the result:
+**The Results page.** **Results** next to a table file opens
+`/files/results/?path=...` (signed-in users, like the rest of the file
+manager). It reads the DuckDB file on every visit and shows one of:
+
+| State | When |
+|---|---|
+| Choose a grouping first | no rule or a draft; links to the grouping page |
+| Not processed yet | the rule is saved, but `processed_files` has no row for this rule id and revision yet (Airflow takes the file within a minute) |
+| Being updated, refresh in a few seconds | Airflow holds the write lock right now (HTTP 503 with `Retry-After`) |
+| Failed | the error from `processed_files` |
+| The table | the first 500 groups of `result_<id>`; the page says so when there are more |
+
+* Only the answer to the current rule is shown: the row in `processed_files`
+  must carry the rule's id (not deleted and uploaded again) and revision (not
+  saved again since). The file's own modification time is not compared: the
+  app never overwrites a file, and a new upload under the same name makes a
+  new rule.
+* The app only reads. `DUCKDB_PATH` (set in `docker-compose.airflow.yml`)
+  points at the file, the `analytics` volume is mounted into `web` read-only,
+  and DuckDB is opened `read_only`. DuckDB lets one writing process or any
+  number of reading ones hold the file, never both: the page catches the lock
+  and asks to refresh, and Airflow waits up to 10 s for a page to let go
+  (`upload_groups.py:connect`). Without `DUCKDB_PATH` there is no page (404)
+  and no link.
+* The page is a plain Django template, as the spec asks (no JS framework).
+  Every value comes from a user's file, so autoescaping stays on (no `|safe`):
+  a cell with `<script>` shows as text.
+
+Looking at the result by hand:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.airflow.yml exec airflow   python -c "import duckdb; c = duckdb.connect('/data/analytics/analytics.duckdb', read_only=True); print(c.sql('select * from upload_groups')); print(c.sql('select * from upload_aggregates')); print(c.sql('select * from processed_files'))"
+docker compose -f docker-compose.yml -f docker-compose.airflow.yml exec airflow   python -c "import duckdb; c = duckdb.connect('/data/analytics/analytics.duckdb', read_only=True); print(c.sql('select * from processed_files')); print(c.sql(\"select table_name from duckdb_tables() where table_name like 'result_%'\"))"
 ```
 
 Tests: `tests/test_files_pipeline.py` (which uploads are grouped, reading a
@@ -448,10 +498,15 @@ file's columns and types), `tests/test_files_views.py` (the draft rule of an
 upload, the grouping page: offered columns, saving, changing, refused choices,
 every format, a broken file, access; rules moved and deleted with the file,
 the rules API and its token), `tests/test_upload_groups.py` (listing the store,
-choosing what is new, drafts waiting, the grouping on a real DuckDB file, from
-disk and from a real S3 endpoint served by moto). `e2e/tests/test_grouping.py`
-(TC-61 to TC-64) clicks through the grouping page in a browser in all four E2E
-modes; the E2E stack sets `PIPELINE_API_TOKEN` for that and runs no Airflow.
+choosing what is new, drafts waiting, the result tables on a real DuckDB file:
+their shape, clashing and hostile names, dropping old ones, waiting for a
+lock; from disk and from a real S3 endpoint served by moto),
+`tests/test_files_results.py` (every state of the Results page against a
+DuckDB file written by the DAG's own functions, escaping, the row limit, a
+real lock held by a second process). `e2e/tests/test_grouping.py` (TC-61 to
+TC-64) and `e2e/tests/test_results.py` (TC-65 to TC-67) click through the
+grouping and Results pages in a browser in all four E2E modes; the E2E stack
+sets `PIPELINE_API_TOKEN` and `DUCKDB_PATH` for that and runs no Airflow.
 CI also has a job, `airflow-dags`, that starts the airflow service and checks
 that `airflow dags list-import-errors` is empty and `watch_uploads` is listed.
 The live chain upload -> Airflow -> DuckDB is not run in CI.
@@ -1063,11 +1118,12 @@ tests/            pytest-django
   for it), so there `PIPELINE_API_TOKEN` is empty and uploads are saved and not
   grouped. `stack=full` on an m7i-flex.large runs it, but that setup is
   not checked by any automated test.
-* Aggregates are stored as `DOUBLE`: `sum`, `min` and `max` are exact only up
-  to 2^53 (about 9 * 10^15) and to about 15 significant digits, so a sum of
-  very large `BIGINT` values or a long `DECIMAL` loses its last digits. `DOUBLE`
-  is kept because `avg` and float columns need it anyway, and one long table
-  has one type for `value`.
+* The Results page shows the first 500 groups; there is no paging and no
+  download of the whole table. `avg` is a `DOUBLE`, shown with all its digits.
+* The Results page and Airflow share one DuckDB file, and DuckDB lets either
+  one writer or the readers in at a time: a page opened during a write asks to
+  refresh, and a write waits up to 10 s for the page. Many readers at once
+  could hold a write back longer; for a team's file manager that is fine.
 * A table file is read twice: once for the schema (to pick the column), once for
   the grouping.
 * The total size limit is counted on every upload by walking the whole storage
