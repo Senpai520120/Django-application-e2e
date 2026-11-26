@@ -10,6 +10,7 @@ file. While Airflow writes, the app cannot open it and says so; Airflow, for
 its part, waits a few seconds for a reader to let go.
 """
 
+import datetime
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -103,6 +104,16 @@ def _read(con, rule) -> Result:
         # database changed by hand gets here; that must not take the page down.
         return Result(WAITING)
     columns = [column[0] for column in cursor.description]
-    rows = cursor.fetchall()
+    rows = [tuple(_as_stored(value) for value in row) for row in cursor.fetchall()]
     total = con.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
     return Result(DONE, columns=columns, rows=rows, total=total)
+
+
+def _as_stored(value):
+    """A date or time as SQL over the table shows it (2026-11-01), not as
+    Django would format it for the locale (Nov. 1, 2026)."""
+    if isinstance(value, datetime.datetime):
+        return value.isoformat(sep=" ")
+    if isinstance(value, (datetime.date, datetime.time)):
+        return value.isoformat()
+    return value

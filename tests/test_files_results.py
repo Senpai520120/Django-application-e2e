@@ -181,6 +181,24 @@ def test_failed_file_shows_the_error(user_client, db):
 
 
 @pytest.mark.django_db
+def test_dates_show_as_duckdb_has_them(user_client, db, file_root):
+    (file_root / "days.csv").write_text(
+        "day,seen\n2026-11-01,2026-11-01 09:30:00\n2026-11-01,2026-11-01 18:05:00\n"
+    )
+    rule = configured("days.csv")
+    rule.group_by = "day"
+    rule.aggregations = [{"op": "max", "column": "seen"}]
+    rule.save()
+    process(db, rule, file_root / "days.csv")
+
+    content = page(user_client, "days.csv").content.decode()
+
+    # Not "Nov. 1, 2026": the page shows what SQL over the table gives.
+    assert "<td>2026-11-01</td>" in content
+    assert "<td>2026-11-01 18:05:00</td>" in content
+
+
+@pytest.mark.django_db
 def test_values_from_the_file_are_escaped(user_client, db, file_root):
     (file_root / "evil.csv").write_text(
         "category,amount\n<script>alert(1)</script>,1\n,2\n"
