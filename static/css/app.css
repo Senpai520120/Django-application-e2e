@@ -104,6 +104,10 @@ th {
 
 td.actions { white-space: nowrap; }
 
+/* Column names of a result table as DuckDB has them (sum_clicks), so they
+   can be typed into SQL as shown. */
+.result-table th { text-transform: none; }
+
 .badge {
   display: inline-block;
   padding: 0.05rem 0.5rem;
