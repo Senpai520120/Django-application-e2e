@@ -2,8 +2,9 @@
 
 Nobody triggers it: the run never stops for long. A sensor looks at the
 uploads every 30 seconds, asks the app which column each file is grouped by,
-and hands the new or changed files on, one task per file. When they are done
-the run ends and @continuous starts the next one at once.
+and hands the new or changed files on, one task per file. Each file's result
+is a table of its own, result_<rule id>, which the app's Results page shows.
+When they are done the run ends and @continuous starts the next one at once.
 """
 
 from __future__ import annotations
@@ -78,6 +79,7 @@ def watch_uploads():
     @task(max_active_tis_per_dagrun=1, retries=0)
     def group_file(item: dict) -> int:
         source, mtime_ms, group_by = item["path"], item["mtime_ms"], item["group_by"]
+        rule_id = item["rule_id"]
         aggregations = item.get("aggregations", [])
         revision = item.get("revision", 0)
         try:
@@ -91,6 +93,7 @@ def watch_uploads():
                 path,
                 source,
                 column,
+                rule_id=rule_id,
                 mtime_ms=mtime_ms,
                 group_by=group_by,
                 aggregations=checked,
@@ -109,6 +112,7 @@ def watch_uploads():
                 aggregations,
                 str(error),
                 revision,
+                rule_id,
             )
             raise UploadError(f"{source}: {error}") from error
 

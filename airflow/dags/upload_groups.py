@@ -9,14 +9,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import time
 import urllib.request
 from collections.abc import Mapping, Sequence
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
 import duckdb
-
-TABLE = "upload_groups"
 
 # DuckDB's reader for each table format. Keep in step with TABLE_FORMATS in
 # files/pipeline.py, which decides what the app sends here. read_xlsx comes
@@ -27,17 +27,6 @@ READERS = {
     ".parquet": "read_parquet",
     ".xlsx": "read_xlsx",
 }
-
-CREATE_TABLE = f"""
-    CREATE TABLE IF NOT EXISTS {TABLE} (
-        source       VARCHAR NOT NULL,
-        group_column VARCHAR NOT NULL,
-        group_value  VARCHAR,
-        row_count    BIGINT NOT NULL,
-        processed_at TIMESTAMP NOT NULL DEFAULT current_timestamp
-    )
-"""
-
 
 # Math per group asked for in the app: op -> DuckDB function. Keep in step
 # with AGGREGATIONS in files/pipeline.py. Only these names ever reach SQL.
@@ -52,25 +41,24 @@ NUMERIC_TYPES = {
     "FLOAT", "DOUBLE",
 }  # fmt: skip
 
-# One row per group and op: the set of ops differs from file to file, and a
-# long table keeps one schema for all of them.
-AGGREGATES_TABLE = "upload_aggregates"
+# Each file's result is a wide table of its own, result_<rule id>: one row
+# per group, one column per math asked for. Files differ in their columns, so
+# one shared table could not hold them all with real column types. The rule's
+# id names the table, never the path: a path can hold any characters, and the
+# id stays the same when the file is renamed.
+RESULT_PREFIX = "result_"
 
-CREATE_AGGREGATES = f"""
-    CREATE TABLE IF NOT EXISTS {AGGREGATES_TABLE} (
-        source       VARCHAR NOT NULL,
-        group_column VARCHAR NOT NULL,
-        group_value  VARCHAR,
-        op           VARCHAR NOT NULL,
-        value_column VARCHAR NOT NULL,
-        value        DOUBLE,
-        processed_at TIMESTAMP NOT NULL DEFAULT current_timestamp
-    )
-"""
+# The long tables of the first version: one row per group in upload_groups,
+# one row per group and op in upload_aggregates. Nothing writes them any
+# more, and stale rows nobody updates would only mislead, so they are
+# dropped the first time the DAG writes.
+LEGACY_TABLES = ("upload_groups", "upload_aggregates")
 
 # What is already done, so the sensor never takes a file twice. A row is one
-# version of a file (its modification time) processed by one rule: its
-# column, its aggregations and its revision (how many times it was saved).
+# version of a file (its modification time) processed by one rule: its id
+# (which names the result table), its column, its aggregations and its
+# revision (how many times it was saved). The app reads it too, to tell
+# whether result_<id> is the answer to the rule it has now.
 PROCESSED = "processed_files"
 
 CREATE_PROCESSED = f"""
@@ -80,6 +68,7 @@ CREATE_PROCESSED = f"""
         group_by     VARCHAR NOT NULL,
         aggregations VARCHAR NOT NULL DEFAULT '[]',
         revision     BIGINT NOT NULL DEFAULT 0,
+        rule_id      BIGINT,
         status       VARCHAR NOT NULL,
         error        VARCHAR,
         processed_at TIMESTAMP NOT NULL DEFAULT current_timestamp
@@ -99,6 +88,13 @@ ADD_AGGREGATIONS_COLUMN = f"""
 ADD_REVISION_COLUMN = f"""
     ALTER TABLE {PROCESSED}
     ADD COLUMN IF NOT EXISTS revision BIGINT DEFAULT 0
+"""
+
+# And for the rule id. Rows from before it are NULL, which never equals a
+# rule's id, so every old file is processed once more into a table of its own.
+ADD_RULE_ID_COLUMN = f"""
+    ALTER TABLE {PROCESSED}
+    ADD COLUMN IF NOT EXISTS rule_id BIGINT
 """
 
 
@@ -159,9 +155,24 @@ def _text(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
+# How long opening the database waits for a reader to let go. DuckDB lets
+# either one writing process or any number of reading ones hold the file, and
+# the app opens it read-only for a moment on every Results page.
+LOCK_WAIT_SECONDS = 10.0
+
+
 def connect(database: str | Path = ":memory:") -> duckdb.DuckDBPyConnection:
     """A DuckDB connection that can also read the app's s3:// files."""
-    con = duckdb.connect(str(database))
+    deadline = time.monotonic() + LOCK_WAIT_SECONDS
+    while True:
+        try:
+            con = duckdb.connect(str(database))
+            break
+        except duckdb.IOException as error:
+            # Only a lock is worth waiting for; a broken file is not.
+            if "lock" not in str(error).lower() or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.2)
     secret = s3_secret(os.environ)
     if secret:
         con.execute(secret)
@@ -212,8 +223,8 @@ def list_table_files(root: str | Path) -> dict[str, int]:
 def fetch_rules(url: str, token: str, timeout: float = 5) -> dict[str, dict]:
     """The rules from the app's API: {path: {"group_by", "aggregations", ...}}.
 
-    Each rule also has "configured" (False: a draft) and "revision" (how many
-    times the user saved it).
+    Each rule also has "id" (it names the result table), "configured" (False:
+    a draft) and "revision" (how many times the user saved it).
 
     Any failure raises: the sensor must not guess the columns while the app
     is down, it fails and is retried instead.
@@ -222,6 +233,8 @@ def fetch_rules(url: str, token: str, timeout: float = 5) -> dict[str, dict]:
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return {
             rule["path"]: {
+                # None from an app that sends no ids: pending() then waits.
+                "id": rule.get("id"),
                 "group_by": rule["group_by"],
                 "aggregations": rule.get("aggregations", []),
                 # An app without drafts sends no flag: all its rules are final.
@@ -256,14 +269,17 @@ def _ensure_processed(con) -> None:
     con.execute(CREATE_PROCESSED)
     con.execute(ADD_AGGREGATIONS_COLUMN)
     con.execute(ADD_REVISION_COLUMN)
+    con.execute(ADD_RULE_ID_COLUMN)
 
 
-def processed_files(db_path: str | Path) -> dict[str, tuple[int, str, str, int]]:
-    """{source: (modified time in ms, column, aggregations_key, revision)}."""
+def processed_files(
+    db_path: str | Path,
+) -> dict[str, tuple[int, str, str, int, int | None]]:
+    """{source: (modified time in ms, column, aggregations_key, revision, rule id)}."""
     with connect(db_path) as con:
         _ensure_processed(con)
         rows = con.execute(
-            f"SELECT source, mtime_ms, group_by, aggregations, revision"
+            f"SELECT source, mtime_ms, group_by, aggregations, revision, rule_id"
             f" FROM {PROCESSED}"
         )
         return {source: tuple(rest) for source, *rest in rows.fetchall()}
@@ -272,31 +288,43 @@ def processed_files(db_path: str | Path) -> dict[str, tuple[int, str, str, int]]
 def pending(
     files: Mapping[str, int],
     rules: Mapping[str, Mapping],
-    processed: Mapping[str, tuple[int, str, str, int]],
+    processed: Mapping[str, tuple[int, str, str, int, int | None]],
 ) -> list[dict]:
     """The files to process now: new, changed, or with a newly saved rule.
 
     A file waits while the user has not chosen its column: its rule is a
     draft, or it has no rule at all (renamed from .txt to .csv, uploaded while
-    grouping was off). A file that failed is done too: it is not tried again
-    until it is uploaded anew or its rule is saved again, even unchanged, which
-    bumps the revision.
+    grouping was off). With no rule there is no id to name its result table
+    either; saving the grouping page makes one. A file that failed is done
+    too: it is not tried again until it is uploaded anew or its rule is saved
+    again, even unchanged, which bumps the revision.
     """
     todo = []
     for path, mtime_ms in sorted(files.items()):
         rule = rules.get(path)
         if rule is None or not rule.get("configured", True):
             continue
+        rule_id = rule.get("id")
+        if not isinstance(rule_id, int):
+            # No id, no table name: an app too old to send one.
+            continue
         group_by = rule.get("group_by") or ""
         aggregations = rule.get("aggregations") or []
         # Not a list (a rule broken by hand) is handed on as it is:
         # check_aggregations fails this one file instead of the sensor.
         revision = rule.get("revision", 0)
-        done = (mtime_ms, group_by, aggregations_key(aggregations), revision)
+        done = (
+            mtime_ms,
+            group_by,
+            aggregations_key(aggregations),
+            revision,
+            rule_id,
+        )
         if processed.get(path) != done:
             todo.append(
                 {
                     "path": path,
+                    "rule_id": rule_id,
                     "mtime_ms": mtime_ms,
                     "group_by": group_by,
                     "aggregations": aggregations,
@@ -322,6 +350,11 @@ def forget_removed(
     back from the file. The listing only adds files removed behind the app's
     back (an S3 console), and only when it is not empty: an empty one may be
     an unmounted volume or S3 not answering, never a reason to delete.
+
+    Their result_<id> tables go too: a table lives only while a done row of
+    processed_files points at it. A renamed file keeps its rule and so its
+    id, but its new path has no row yet; the next tick makes the table again
+    from the file under its new name.
     """
     configured = {path for path, rule in rules.items() if rule.get("configured", True)}
     gone = {path for path in processed if path not in configured}
@@ -332,35 +365,74 @@ def forget_removed(
         # The usual tick: no write, so no write lock on DuckDB.
         return []
     with connect(db_path) as con:
-        con.execute(CREATE_TABLE)
-        con.execute(CREATE_AGGREGATES)
         _ensure_processed(con)
         con.begin()
-        for table in (TABLE, AGGREGATES_TABLE, PROCESSED):
-            con.execute(f"DELETE FROM {table} WHERE list_contains(?, source)", [gone])
+        con.execute(f"DELETE FROM {PROCESSED} WHERE list_contains(?, source)", [gone])
+        _drop_unused_results(con)
         con.commit()
     return gone
+
+
+def result_table(rule_id: int) -> str:
+    """The name of a file's result table; int() keeps it a plain name."""
+    return f"{RESULT_PREFIX}{int(rule_id)}"
+
+
+_RESULT_NAME = re.compile(rf"{RESULT_PREFIX}([0-9]+)")
+
+
+def result_tables(con) -> dict[int, str]:
+    """{rule id: table name} of every result table in the database."""
+    names = con.execute(
+        "SELECT table_name FROM duckdb_tables() WHERE schema_name = 'main'"
+    ).fetchall()
+    return {
+        int(match[1]): name
+        for (name,) in names
+        if (match := _RESULT_NAME.fullmatch(name))
+    }
+
+
+def _drop_unused_results(con) -> None:
+    """Drop the result tables no done row points at, and the old long tables.
+
+    Runs inside the caller's transaction, so a result table and its row of
+    processed_files appear and go away together.
+    """
+    used = {
+        row[0]
+        for row in con.execute(
+            f"SELECT rule_id FROM {PROCESSED}"
+            " WHERE status = 'done' AND rule_id IS NOT NULL"
+        ).fetchall()
+    }
+    for rule_id, name in result_tables(con).items():
+        if rule_id not in used:
+            con.execute(f"DROP TABLE {_quote(name)}")
+    for name in LEGACY_TABLES:
+        con.execute(f"DROP TABLE IF EXISTS {name}")
 
 
 def _mark(
     con,
     source: str,
+    rule_id: int | None,
     mtime_ms: int,
     group_by: str,
     aggregations: Sequence[Mapping[str, str]],
     revision: int,
     error: str | None,
 ) -> None:
-    _ensure_processed(con)
     con.execute(
         f"""
         INSERT OR REPLACE INTO {PROCESSED}
-            (source, mtime_ms, group_by, aggregations, revision, status, error,
-             processed_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, current_timestamp)
+            (source, rule_id, mtime_ms, group_by, aggregations, revision, status,
+             error, processed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, current_timestamp)
         """,
         [
             source,
+            rule_id,
             mtime_ms,
             group_by,
             aggregations_key(aggregations),
@@ -379,10 +451,19 @@ def mark_failed(
     aggregations: Sequence[Mapping[str, str]],
     error: str,
     revision: int = 0,
+    rule_id: int | None = None,
 ) -> None:
-    """Remember a file that cannot be processed, so it is not tried every tick."""
+    """Remember a file that cannot be processed, so it is not tried every tick.
+
+    Its old result table goes too: the app shows the error instead, and a
+    table from an earlier rule must not pass for the answer to this one.
+    """
     with connect(db_path) as con:
-        _mark(con, source, mtime_ms, group_by, aggregations, revision, error)
+        _ensure_processed(con)
+        con.begin()
+        _mark(con, source, rule_id, mtime_ms, group_by, aggregations, revision, error)
+        _drop_unused_results(con)
+        con.commit()
 
 
 def reader(path: str | Path) -> str:
@@ -470,66 +551,85 @@ def _quote(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
+ROW_COUNT = "row_count"
+
+
+def result_columns(column: str, aggregations: Sequence[Mapping[str, str]]) -> list[str]:
+    """Column names of a result table: the group column, row_count, op_column...
+
+    A name already taken gets _2, _3, ... in the order the columns come: a
+    file may well have a column of its own called row_count, or one called
+    sum_amount next to amount. DuckDB compares names without case, so
+    "Sum_amount" is taken by "sum_amount" too.
+    """
+    taken: set[str] = set()
+    names = []
+    for wanted in [column, ROW_COUNT] + [
+        f"{item['op']}_{item['column']}" for item in aggregations
+    ]:
+        name, number = wanted, 1
+        while name.lower() in taken:
+            number += 1
+            name = f"{wanted}_{number}"
+        taken.add(name.lower())
+        names.append(name)
+    return names
+
+
 def save_groups(
     db_path: str | Path,
     path: str | Path,
     source: str,
     column: str,
     *,
+    rule_id: int,
     mtime_ms: int,
     group_by: str,
     aggregations: Sequence[Mapping[str, str]] = (),
     revision: int = 0,
 ) -> int:
-    """Replace the groups and aggregates of `source`; returns how many groups.
+    """Write the result table of `source` anew; returns how many groups.
 
-    `aggregations` must come from check_aggregations. The same transaction
-    marks the file done with its modified time and its rule (`group_by`,
-    maybe empty, the aggregations and the revision), so the results and the mark never
-    disagree.
+    The table is result_<rule_id>: the group column, row_count and one column
+    per aggregation (sum_amount, ...), with the types DuckDB gives them. CREATE
+    OR REPLACE makes it from scratch every time, so a rule with other math
+    gets a table of another shape. `aggregations` must come from
+    check_aggregations. The same transaction marks the file done with its
+    modified time and its rule (`group_by`, maybe empty, the aggregations and
+    the revision), so the table and the mark never disagree.
     """
-    # Both are the file's own columns already (pick_column, check_aggregations).
-    group = _quote(column)
+    table = result_table(rule_id)
+    names = [_quote(name) for name in result_columns(column, aggregations)]
+    # The group column and the aggregated ones are the file's own already
+    # (pick_group_column, check_aggregations), the functions come from
+    # AGGREGATES, and every name is quoted.
+    selected = [f"{_quote(column)} AS {names[0]}", f"count(*) AS {names[1]}"]
+    for item, name in zip(aggregations, names[2:], strict=True):
+        function = AGGREGATES[item["op"]]
+        selected.append(f"{function}({_quote(item['column'])}) AS {name}")
     with connect(db_path) as con:
-        con.execute(CREATE_TABLE)
-        con.execute(CREATE_AGGREGATES)
+        _ensure_processed(con)
         con.begin()
-        # The file is read once into memory for all the queries below; uploads
-        # are small (FILE_MANAGER_MAX_FILE_SIZE).
+        # The file is read once into memory; uploads are small
+        # (FILE_MANAGER_MAX_FILE_SIZE).
         con.execute(
             f"CREATE TEMP TABLE upload AS SELECT * FROM {reader(path)}(?)",
             [str(path)],
         )
-        # A file uploaded again under the same name must not count twice.
-        con.execute(f"DELETE FROM {TABLE} WHERE source = ?", [source])
-        con.execute(f"DELETE FROM {AGGREGATES_TABLE} WHERE source = ?", [source])
-        con.execute(
-            f"""
-            INSERT INTO {TABLE} (source, group_column, group_value, row_count)
-            SELECT ?, ?, CAST({group} AS VARCHAR), count(*)
+        # Ordered by the group, so the table reads well as it is.
+        con.execute(f"""
+            CREATE OR REPLACE TABLE {table} AS
+            SELECT {", ".join(selected)}
             FROM upload
-            GROUP BY {group}
-            """,
-            [source, column],
-        )
-        for item in aggregations:
-            function = AGGREGATES[item["op"]]
-            con.execute(
-                f"""
-                INSERT INTO {AGGREGATES_TABLE}
-                    (source, group_column, group_value, op, value_column, value)
-                SELECT ?, ?, CAST({group} AS VARCHAR), ?, ?,
-                       CAST({function}({_quote(item["column"])}) AS DOUBLE)
-                FROM upload
-                GROUP BY {group}
-                """,
-                [source, column, item["op"], item["column"]],
-            )
-        _mark(con, source, mtime_ms, group_by, aggregations, revision, None)
+            GROUP BY 1
+            ORDER BY 1 NULLS LAST
+            """)
+        _mark(con, source, rule_id, mtime_ms, group_by, aggregations, revision, None)
+        # The file's table under an older rule (uploaded again under the same
+        # name), and the old long tables, go in the same step.
+        _drop_unused_results(con)
         con.commit()
-        row = con.execute(
-            f"SELECT count(*) FROM {TABLE} WHERE source = ?", [source]
-        ).fetchone()
+        row = con.execute(f"SELECT count(*) FROM {table}").fetchone()
         # count(*) always gives one row; fetchone() is typed as maybe None.
         assert row is not None
         return row[0]

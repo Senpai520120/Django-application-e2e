@@ -496,10 +496,12 @@ class GroupingRulesView(View):
                 headers={"WWW-Authenticate": "Bearer"},
             )
         # Drafts too, marked unconfigured: Airflow must know to wait for
-        # them rather than group them by a default column.
+        # them rather than group them by a default column. The id names the
+        # file's result table in DuckDB (result_<id>); it stays the same
+        # when the file is renamed.
         rules = list(
             GroupingRule.objects.values(
-                "path", "group_by", "aggregations", "configured", "revision"
+                "id", "path", "group_by", "aggregations", "configured", "revision"
             )
         )
         return JsonResponse(rules, safe=False)
