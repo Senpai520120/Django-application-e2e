@@ -969,3 +969,50 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 **Expected result:** notes.txt has no "Grouping" link. After the second upload the message points to the Grouping links, and both CSV files show "waiting for a grouping column".
 
 **Automated test:** `tests/test_grouping.py::test_64_other_files_and_several_tables`
+
+## TC-65. Results ask for a grouping first
+
+**Assignment:** #22 File manager
+
+**Preconditions:** Signed in as demo_admin. The app has PIPELINE_API_TOKEN and DUCKDB_PATH set. An empty folder of the test is open
+
+**Steps:**
+
+1. Upload a.csv and b.csv together
+2. Press "Results" next to a.csv
+3. Press "Choose the grouping"
+
+**Expected result:** The Results page of a.csv says to choose a grouping first; the link opens the grouping page of a.csv.
+
+**Automated test:** `tests/test_results.py::test_65_results_ask_for_a_grouping_first`
+
+## TC-66. Results of a saved grouping wait for Airflow
+
+**Assignment:** #22 File manager
+
+**Preconditions:** Signed in as demo_admin. The app has PIPELINE_API_TOKEN and DUCKDB_PATH set. An empty folder of the test is open. Airflow is not running
+
+**Steps:**
+
+1. Upload seo.csv
+2. Group by device with sum of clicks and save
+3. Press "Results" next to seo.csv
+4. Press "Back to the folder"
+
+**Expected result:** The page says "Grouped by device, sum(clicks)." and that the file is not processed yet; the back link returns to the folder.
+
+**Automated test:** `tests/test_results.py::test_66_saved_grouping_waits_for_airflow`
+
+## TC-67. Only table files have results
+
+**Assignment:** #22 File manager
+
+**Preconditions:** Signed in as demo_admin. The app has PIPELINE_API_TOKEN and DUCKDB_PATH set. An empty folder of the test is open
+
+**Steps:**
+
+1. Upload notes.txt
+
+**Expected result:** notes.txt has no "Results" link.
+
+**Automated test:** `tests/test_results.py::test_67_only_table_files_have_results`

@@ -777,5 +777,43 @@
     ],
     "expected": "notes.txt has no \"Grouping\" link. After the second upload the message points to the Grouping links, and both CSV files show \"waiting for a grouping column\".",
     "autotest": "tests/test_grouping.py::test_64_other_files_and_several_tables"
+  },
+  {
+    "id": "TC-65",
+    "title": "Results ask for a grouping first",
+    "assignment": 22,
+    "preconditions": "Signed in as demo_admin. The app has PIPELINE_API_TOKEN and DUCKDB_PATH set. An empty folder of the test is open",
+    "steps": [
+      "Upload a.csv and b.csv together",
+      "Press \"Results\" next to a.csv",
+      "Press \"Choose the grouping\""
+    ],
+    "expected": "The Results page of a.csv says to choose a grouping first; the link opens the grouping page of a.csv.",
+    "autotest": "tests/test_results.py::test_65_results_ask_for_a_grouping_first"
+  },
+  {
+    "id": "TC-66",
+    "title": "Results of a saved grouping wait for Airflow",
+    "assignment": 22,
+    "preconditions": "Signed in as demo_admin. The app has PIPELINE_API_TOKEN and DUCKDB_PATH set. An empty folder of the test is open. Airflow is not running",
+    "steps": [
+      "Upload seo.csv",
+      "Group by device with sum of clicks and save",
+      "Press \"Results\" next to seo.csv",
+      "Press \"Back to the folder\""
+    ],
+    "expected": "The page says \"Grouped by device, sum(clicks).\" and that the file is not processed yet; the back link returns to the folder.",
+    "autotest": "tests/test_results.py::test_66_saved_grouping_waits_for_airflow"
+  },
+  {
+    "id": "TC-67",
+    "title": "Only table files have results",
+    "assignment": 22,
+    "preconditions": "Signed in as demo_admin. The app has PIPELINE_API_TOKEN and DUCKDB_PATH set. An empty folder of the test is open",
+    "steps": [
+      "Upload notes.txt"
+    ],
+    "expected": "notes.txt has no \"Results\" link.",
+    "autotest": "tests/test_results.py::test_67_only_table_files_have_results"
   }
 ]

@@ -12,6 +12,7 @@ urlpatterns = [
     path("delete/", views.DeleteView.as_view(), name="delete"),
     path("download/", views.DownloadView.as_view(), name="download"),
     path("grouping/", views.GroupingView.as_view(), name="grouping"),
+    path("results/", views.ResultsView.as_view(), name="results"),
     path(
         "api/grouping-rules/",
         views.GroupingRulesView.as_view(),

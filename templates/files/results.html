@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+
+{% block title %}Results {{ name }} — Users &amp; Roles{% endblock %}
+
+{% block content %}
+  <h1>Results: {{ name }}</h1>
+
+  {# Every value below comes from a user's file: autoescaping stays on, no |safe. #}
+  {% if result is None %}
+    <div data-testid="results-state" data-state="unconfigured">
+      <p class="message info">
+        Choose a grouping first: nobody has picked the column and the math for this file yet,
+        so Airflow leaves it alone.
+      </p>
+      <p><a href="{{ grouping_url }}">Choose the grouping</a></p>
+    </div>
+  {% else %}
+    <p class="hint" data-testid="results-rule">Grouped {{ summary }}.
+      <a href="{{ grouping_url }}">Change the grouping</a></p>
+
+    {% if result.state == "waiting" %}
+      <div data-testid="results-state" data-state="waiting">
+        <p class="message info">
+          Not processed yet: Airflow takes the file within a minute after the grouping is saved.
+          Refresh the page to check.
+        </p>
+      </div>
+    {% elif result.state == "busy" %}
+      <div data-testid="results-state" data-state="busy">
+        <p class="message info">
+          The results are being updated right now. Refresh the page in a few seconds.
+        </p>
+      </div>
+    {% elif result.state == "failed" %}
+      <div data-testid="results-state" data-state="failed">
+        <p class="message error" role="alert">
+          Airflow could not process the file: <span data-testid="results-error">{{ result.error }}</span>
+        </p>
+        <p class="hint">Fix the file or the grouping and save the grouping again to retry.</p>
+      </div>
+    {% else %}
+      <div data-testid="results-state" data-state="done">
+        <p class="hint">
+          Groups: {{ result.total }}.
+          {% if result.truncated %}
+            <strong data-testid="results-truncated">Only the first {{ max_rows }} are shown.</strong>
+          {% endif %}
+        </p>
+        <div class="table-wrap">
+          <table class="result-table" data-testid="results-table">
+            <thead>
+              <tr>
+                {% for column in result.columns %}<th scope="col">{{ column }}</th>{% endfor %}
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in result.rows %}
+                <tr data-testid="result-row">
+                  {% for cell in row %}<td>{{ cell|default_if_none:"—" }}</td>{% endfor %}
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    {% endif %}
+  {% endif %}
+
+  <p><a href="{{ back_url }}">← Back to the folder</a></p>
+{% endblock %}

@@ -704,19 +704,21 @@ def get_rules(client, **headers):
 
 @pytest.mark.django_db
 def test_rules_api_gives_every_rule_to_the_right_token(client, pipeline_on):
-    GroupingRule.objects.create(
+    sales = GroupingRule.objects.create(
         path="reports/sales.csv",
         group_by="category",
         aggregations=[{"op": "sum", "column": "qty"}],
         configured=True,
     )
-    GroupingRule.objects.create(path="seo.csv")
+    seo = GroupingRule.objects.create(path="seo.csv")
 
     response = get_rules(client, authorization=f"Bearer {TOKEN}")
 
     assert response.status_code == 200
     assert response.json() == [
         {
+            # The id names the file's result table in DuckDB.
+            "id": sales.pk,
             "path": "reports/sales.csv",
             "group_by": "category",
             "aggregations": [{"op": "sum", "column": "qty"}],
@@ -725,6 +727,7 @@ def test_rules_api_gives_every_rule_to_the_right_token(client, pipeline_on):
         },
         # A draft is sent too, so Airflow knows to wait for it.
         {
+            "id": seo.pk,
             "path": "seo.csv",
             "group_by": "",
             "aggregations": [],

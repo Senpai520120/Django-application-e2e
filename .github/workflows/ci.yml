@@ -177,14 +177,17 @@ jobs:
       - uses: actions/checkout@v7
 
       # PIPELINE_API_TOKEN turns grouping on, so tests/test_grouping.py has the
-      # grouping page to test; no Airflow is needed for that. Each mode below
-      # writes a fresh .env, and each sets it again.
+      # grouping page to test; no Airflow is needed for that. DUCKDB_PATH turns
+      # the Results page on; with no Airflow the file never appears, and the
+      # page shows its "not processed yet" state. Each mode below writes a
+      # fresh .env, and each sets both again.
       - name: Prepare .env
         run: |
           cp .env.example .env
           KEY=$(python -c "import secrets; print(secrets.token_urlsafe(64))")
           sed -i "s|^SECRET_KEY=.*|SECRET_KEY=$KEY|" .env
           echo "PIPELINE_API_TOKEN=$(python -c 'import secrets; print(secrets.token_urlsafe(32))')" >> .env
+          echo "DUCKDB_PATH=/data/analytics/analytics.duckdb" >> .env
 
       - name: Start the stack
         run: docker compose up -d --build
@@ -237,6 +240,7 @@ jobs:
           AWS_ACCESS_KEY_ID=test
           AWS_SECRET_ACCESS_KEY=test
           PIPELINE_API_TOKEN=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+          DUCKDB_PATH=/data/analytics/analytics.duckdb
           ENV
           FILE_STORAGE_BACKEND=s3 docker compose --profile s3 up -d --build
 
@@ -267,7 +271,7 @@ jobs:
           docker compose --profile s3 down -v
           KEY=$(python -c "import secrets; print(secrets.token_urlsafe(64))")
           TOKEN=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
-          printf 'SECRET_KEY=%s\nPIPELINE_API_TOKEN=%s\n' "$KEY" "$TOKEN" > .env
+          printf 'SECRET_KEY=%s\nPIPELINE_API_TOKEN=%s\nDUCKDB_PATH=/data/analytics/analytics.duckdb\n' "$KEY" "$TOKEN" > .env
           # --wait: up returns once Keycloak and the app pass their healthchecks.
           docker compose -f docker-compose.yml -f docker-compose.sso.yml up -d --build --wait
           curl -sf http://localhost:8080/realms/myapp/.well-known/openid-configuration > /dev/null
