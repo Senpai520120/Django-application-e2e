@@ -6,17 +6,19 @@ goes through `files.storage.get_storage()`. A malformed path turns into
 is nothing to catch here.
 """
 
+import csv
+import io
 import secrets
 
 from django.conf import settings
 from django.contrib import messages
 from django.db.models import F
-from django.http import FileResponse, Http404, JsonResponse
+from django.http import FileResponse, Http404, HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
 from django.template.defaultfilters import filesizeformat
 from django.urls import reverse
 from django.utils.functional import cached_property
-from django.utils.http import urlencode
+from django.utils.http import content_disposition_header, urlencode
 from django.utils.text import get_valid_filename
 from django.utils.translation import gettext_lazy as _
 from django.views import View
@@ -517,8 +519,73 @@ class ResultsView(FileManagerMixin, TemplateView):
             # No rule or a draft: nothing was asked for, nothing to read.
             result=read_result(rule) if configured else None,
             max_rows=MAX_ROWS,
+            download_url=reverse("files:results_download")
+            + "?"
+            + urlencode({"path": self.path}),
         )
         return context
+
+
+# A cell that starts like this is a formula to Excel and LibreOffice: "=HYPERLINK(...)"
+# from an uploaded file would run when the CSV is opened (CSV injection).
+_FORMULA_START = ("=", "+", "-", "@", "\t", "\r")
+
+
+def csv_cell(value) -> str:
+    """One cell of the result CSV: empty for NULL, text kept as text.
+
+    Text that would start a formula gets a leading apostrophe, which a
+    spreadsheet shows as plain text; numbers are written as they are, so a
+    negative sum stays a number.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, str) and value.startswith(_FORMULA_START):
+        return "'" + value
+    return str(value)
+
+
+class ResultsDownloadView(FileManagerMixin, View):
+    """The whole result table of a table file as a CSV file.
+
+    The Results page shows the first MAX_ROWS groups; this gives all of them.
+    Only a result of the file's current rule, as on the page: anything else
+    (no rule, a draft, not processed yet, failed) is a 404, and a DuckDB file
+    Airflow is writing right now a 503 to retry.
+    """
+
+    def get(self, request, *args, **kwargs):
+        if not results_enabled():
+            raise Http404("Results are off.")
+        self.require_table_file()
+        rule = GroupingRule.objects.filter(path=self.path, configured=True).first()
+        if rule is None:
+            raise Http404("No grouping is saved for this file.")
+        result = read_result(rule, everything=True)
+        if result.state == "busy":
+            response = HttpResponse(
+                "The results are being updated. Try again in a few seconds.",
+                status=503,
+                content_type="text/plain; charset=utf-8",
+            )
+            response.headers["Retry-After"] = "5"
+            return response
+        if result.state != "done":
+            raise Http404("This file has no result yet.")
+        text = io.StringIO()
+        writer = csv.writer(text)
+        writer.writerow([csv_cell(name) for name in result.columns])
+        writer.writerows([csv_cell(value) for value in row] for row in result.rows)
+        stem = self.path.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+        # utf-8-sig: the BOM makes Excel read Cyrillic and other non-Latin
+        # text right; other programs skip it.
+        response = HttpResponse(
+            text.getvalue().encode("utf-8-sig"), content_type="text/csv; charset=utf-8"
+        )
+        response.headers["Content-Disposition"] = content_disposition_header(
+            as_attachment=True, filename=f"{stem}_result.csv"
+        )
+        return response
 
 
 class GroupingRulesView(View):

@@ -469,7 +469,7 @@ manager). It reads the DuckDB file on every visit and shows one of:
 | Not processed yet | the rule is saved, but `processed_files` has no row for this rule id and revision yet (Airflow takes the file within a minute) |
 | Being updated, refresh in a few seconds | Airflow holds the write lock right now (HTTP 503 with `Retry-After`) |
 | Failed | the error from `processed_files` |
-| The table | the first 500 groups of `result_<id>`; the page says so when there are more |
+| The table | the first 500 groups of `result_<id>`; the page says so when there are more, and **Download CSV** gives all of them |
 
 * Only the answer to the current rule is shown: the row in `processed_files`
   must carry the rule's id (not deleted and uploaded again) and revision (not
@@ -486,6 +486,16 @@ manager). It reads the DuckDB file on every visit and shows one of:
 * The page is a plain Django template, as the spec asks (no JS framework).
   Every value comes from a user's file, so autoescaping stays on (no `|safe`):
   a cell with `<script>` shows as text.
+* **Download CSV** (`/files/results/download/?path=...`, same access) gives the
+  whole `result_<id>` as `<file name>_result.csv`, every group, no 500 cut.
+  It answers only for a result of the current rule, as the page does: no
+  rule, a draft, not processed yet or failed is a 404, and a write in
+  progress a 503 with `Retry-After`. The file is UTF-8 with a BOM, so Excel
+  reads Cyrillic right; NULL is an empty cell, dates are ISO. A text cell
+  that starts with `=`, `+`, `-`, `@`, a tab or a carriage return gets a
+  leading `'`, so a spreadsheet shows it instead of running it as a formula
+  (CSV injection); numbers are written as they are. The uploaded file itself
+  is never changed: **Download** next to it still gives the original.
 
 Looking at the result by hand:
 
@@ -503,8 +513,8 @@ their shape, clashing and hostile names, dropping old ones, waiting for a
 lock; from disk and from a real S3 endpoint served by moto),
 `tests/test_files_results.py` (every state of the Results page against a
 DuckDB file written by the DAG's own functions, escaping, the row limit, a
-real lock held by a second process). `e2e/tests/test_grouping.py` (TC-61 to
-TC-64) and `e2e/tests/test_results.py` (TC-65 to TC-67) click through the
+real lock held by a second process, the CSV download). `e2e/tests/test_grouping.py` (TC-61 to
+TC-64) and `e2e/tests/test_results.py` (TC-65 to TC-68) click through the
 grouping and Results pages in a browser in all four E2E modes; the E2E stack
 sets `PIPELINE_API_TOKEN` and `DUCKDB_PATH` for that and runs no Airflow.
 CI also has a job, `airflow-dags`, that starts the airflow service and checks
@@ -1227,8 +1237,8 @@ tests/            pytest-django
   for it), so there `PIPELINE_API_TOKEN` is empty and uploads are saved and not
   grouped. `stack=full` on an m7i-flex.large runs it, but that setup is
   not checked by any automated test.
-* The Results page shows the first 500 groups; there is no paging and no
-  download of the whole table. `avg` is a `DOUBLE`, shown with all its digits.
+* The Results page shows the first 500 groups and has no paging; Download CSV
+  gives the whole table. `avg` is a `DOUBLE`, shown with all its digits.
 * The Results page and Airflow share one DuckDB file, and DuckDB lets either
   one writer or the readers in at a time: a page opened during a write asks to
   refresh, and a write waits up to 10 s for the page. Many readers at once

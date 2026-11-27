@@ -1016,3 +1016,21 @@ Generated from `tools/test_cases.json` by `python tools/create_test_case_issues.
 **Expected result:** notes.txt has no "Results" link.
 
 **Automated test:** `tests/test_results.py::test_67_only_table_files_have_results`
+
+## TC-68. CSV download only for a result
+
+**Assignment:** #22 File manager
+
+**Preconditions:** Signed in as demo_admin. The app has PIPELINE_API_TOKEN and DUCKDB_PATH set. An empty folder of the test is open
+
+**Steps:**
+
+1. Upload seo.csv
+2. On the grouping page choose device and sum of clicks, click "Save and process"
+3. Click "Results" next to seo.csv
+4. Without Airflow: open /files/results/download/?path=<folder>/seo.csv directly
+5. With Airflow done: click "Download CSV"
+
+**Expected result:** Without Airflow the page has no "Download CSV" link and the direct address answers 404. With Airflow done the link downloads seo_result.csv with every group: device,row_count,sum_clicks; desktop,1,9; mobile,2,19.
+
+**Automated test:** `tests/test_results.py::test_68_csv_download_only_for_a_result`

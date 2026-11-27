@@ -815,5 +815,20 @@
     ],
     "expected": "notes.txt has no \"Results\" link.",
     "autotest": "tests/test_results.py::test_67_only_table_files_have_results"
+  },
+  {
+    "id": "TC-68",
+    "title": "CSV download only for a result",
+    "assignment": 22,
+    "preconditions": "Signed in as demo_admin. The app has PIPELINE_API_TOKEN and DUCKDB_PATH set. An empty folder of the test is open",
+    "steps": [
+      "Upload seo.csv",
+      "On the grouping page choose device and sum of clicks, click \"Save and process\"",
+      "Click \"Results\" next to seo.csv",
+      "Without Airflow: open /files/results/download/?path=<folder>/seo.csv directly",
+      "With Airflow done: click \"Download CSV\""
+    ],
+    "expected": "Without Airflow the page has no \"Download CSV\" link and the direct address answers 404. With Airflow done the link downloads seo_result.csv with every group: device,row_count,sum_clicks; desktop,1,9; mobile,2,19.",
+    "autotest": "tests/test_results.py::test_68_csv_download_only_for_a_result"
   }
 ]

@@ -9,6 +9,8 @@ Every test works in its own folder from the `workspace` fixture.
 """
 
 import re
+from pathlib import Path
+from urllib.parse import urlencode
 
 import pytest
 from playwright.sync_api import expect
@@ -67,3 +69,28 @@ def test_67_only_table_files_have_results(files_page: FilesPage, workspace, make
     files_page.upload(make_file("notes.txt", "hello"))
 
     expect(files_page.results_link("notes.txt")).to_have_count(0)
+
+
+def test_68_csv_download_only_for_a_result(files_page: FilesPage, workspace, make_file):
+    """TC-68: Download CSV appears only with a result and gives every group."""
+    files_page.upload(make_file("seo.csv", SEO))
+    GroupingPage(files_page.page).choose("device", ("sum", "clicks"))
+    results = open_results(files_page, "seo.csv")
+    expect(results.state).to_have_attribute("data-state", re.compile("waiting|done"))
+    download_url = f"{config.BASE_URL}/files/results/download/?" + urlencode(
+        {"path": f"{workspace}/seo.csv"}
+    )
+
+    if results.state.get_attribute("data-state") == "waiting":
+        # CI: no Airflow, no result, so nothing to download yet.
+        expect(results.download_link).to_have_count(0)
+        assert files_page.page.request.get(download_url).status == 404
+        return
+
+    # The local stand, Airflow already done: the file holds the whole table.
+    with files_page.page.expect_download() as caught:
+        results.download_link.click()
+    download = caught.value
+    assert download.suggested_filename == "seo_result.csv"
+    lines = Path(download.path()).read_text(encoding="utf-8-sig").splitlines()
+    assert lines == ["device,row_count,sum_clicks", "desktop,1,9", "mobile,2,19"]

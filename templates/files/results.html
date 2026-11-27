@@ -45,6 +45,8 @@
           {% if result.truncated %}
             <strong data-testid="results-truncated">Only the first {{ max_rows }} are shown.</strong>
           {% endif %}
+          <a href="{{ download_url }}" data-testid="results-download">Download CSV</a>
+          (all groups)
         </p>
         <div class="table-wrap">
           <table class="result-table" data-testid="results-table">

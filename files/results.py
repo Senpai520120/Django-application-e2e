@@ -57,15 +57,19 @@ def result_table(rule_id: int) -> str:
     return f"result_{int(rule_id)}"
 
 
-def read_result(rule) -> Result:
-    """What Airflow made of the file of a configured `rule` (a GroupingRule)."""
+def read_result(rule, everything: bool = False) -> Result:
+    """What Airflow made of the file of a configured `rule` (a GroupingRule).
+
+    At most MAX_ROWS rows, the page's cut; `everything` reads them all, for
+    the CSV download.
+    """
     database = Path(settings.DUCKDB_PATH)
     if not database.is_file():
         # Airflow has not written anything yet, or has not started at all.
         return Result(WAITING)
     try:
         with duckdb.connect(str(database), read_only=True) as con:
-            return _read(con, rule)
+            return _read(con, rule, everything)
     except duckdb.IOException as error:
         if "lock" not in str(error).lower():
             raise
@@ -73,7 +77,7 @@ def read_result(rule) -> Result:
         return Result(BUSY)
 
 
-def _read(con, rule) -> Result:
+def _read(con, rule, everything: bool) -> Result:
     try:
         row = con.execute(
             "SELECT rule_id, revision, status, error FROM processed_files"
@@ -96,9 +100,8 @@ def _read(con, rule) -> Result:
         return Result(FAILED, error=error or "")
     table = result_table(rule.pk)
     try:
-        cursor = con.execute(
-            f"SELECT * FROM {table} ORDER BY 1 NULLS LAST LIMIT {MAX_ROWS}"
-        )
+        cut = "" if everything else f" LIMIT {int(MAX_ROWS)}"
+        cursor = con.execute(f"SELECT * FROM {table} ORDER BY 1 NULLS LAST{cut}")
     except duckdb.CatalogException:
         # The DAG writes the table and its row in one transaction, so only a
         # database changed by hand gets here; that must not take the page down.

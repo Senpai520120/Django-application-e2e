@@ -23,4 +23,6 @@ class ResultsPage(BasePage):
         self.rule = page.get_by_test_id("results-rule")
         self.choose_grouping_link = page.get_by_role("link", name="Choose the grouping")
         self.table = page.get_by_test_id("results-table")
+        # "Download CSV": the whole result table as a file, only once done.
+        self.download_link = page.get_by_test_id("results-download")
         self.back_link = page.get_by_role("link", name="Back to the folder")

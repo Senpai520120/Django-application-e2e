@@ -322,3 +322,150 @@ def test_list_has_no_results_link_without_duckdb(user_client, db, settings):
 
     assert "Grouping sales.csv" in content
     assert "Results sales.csv" not in content
+
+
+# The whole result as a CSV file (Download CSV on the Results page).
+
+
+def download(client, path="sales.csv"):
+    return client.get(reverse("files:results_download"), {"path": path})
+
+
+def csv_rows(response):
+    import csv
+
+    text = response.content.decode("utf-8-sig")
+    return list(csv.reader(text.splitlines()))
+
+
+@pytest.mark.django_db
+def test_download_gives_every_group_as_csv(user_client, db, file_root, monkeypatch):
+    # The page cuts at MAX_ROWS; the file never does.
+    monkeypatch.setattr(results, "MAX_ROWS", 2)
+    monkeypatch.setattr("files.views.MAX_ROWS", 2)
+    (file_root / "many.csv").write_text(
+        "category,amount\n" + "".join(f"c{n},{n}\n" for n in range(5))
+    )
+    rule = configured("many.csv")
+    process(db, rule, file_root / "many.csv")
+
+    response = download(user_client, "many.csv")
+
+    assert response.status_code == 200
+    assert response["Content-Type"] == "text/csv; charset=utf-8"
+    assert response["Content-Disposition"] == ('attachment; filename="many_result.csv"')
+    # A BOM first, so Excel reads non-Latin text right.
+    assert response.content.startswith("﻿".encode())
+    assert csv_rows(response) == [
+        ["category", "row_count", "sum_amount"],
+        *[[f"c{n}", "1", str(n)] for n in range(5)],
+    ]
+
+
+@pytest.mark.django_db
+def test_download_link_is_on_the_page_of_a_result(user_client, db, file_root):
+    rule = configured()
+    process(db, rule, file_root / "sales.csv")
+
+    content = page(user_client).content.decode()
+
+    assert reverse("files:results_download") + "?path=sales.csv" in content
+    assert "Download CSV" in content
+
+
+@pytest.mark.django_db
+def test_no_download_link_while_waiting(user_client, db):
+    configured()
+
+    assert "Download CSV" not in page(user_client).content.decode()
+
+
+@pytest.mark.django_db
+def test_download_keeps_values_as_they_are_stored(user_client, db, file_root):
+    (file_root / "days.csv").write_text(
+        'day,amount,note\n2026-11-01,-3,=HYPERLINK("http://x")\n'
+        "2026-11-02,4,\n,5,@sum\n"
+    )
+    rule = configured("days.csv")
+    rule.group_by = "day"
+    rule.aggregations = [
+        {"op": "sum", "column": "amount"},
+        {"op": "max", "column": "note"},
+    ]
+    rule.save()
+    process(db, rule, file_root / "days.csv")
+
+    rows = csv_rows(download(user_client, "days.csv"))
+
+    assert rows == [
+        ["day", "row_count", "sum_amount", "max_note"],
+        # A negative sum stays a number; text that a spreadsheet would run as
+        # a formula gets an apostrophe; NULL is an empty cell; dates are ISO.
+        ["2026-11-01", "1", "-3", '\'=HYPERLINK("http://x")'],
+        ["2026-11-02", "1", "4", ""],
+        ["", "1", "5", "'@sum"],
+    ]
+
+
+@pytest.mark.django_db
+def test_download_names_a_non_latin_file(user_client, db, file_root):
+    (file_root / "продажі.csv").write_text(SALES)
+    rule = configured("продажі.csv")
+    process(db, rule, file_root / "продажі.csv")
+
+    response = download(user_client, "продажі.csv")
+
+    assert response.status_code == 200
+    assert "filename*=utf-8''" in response["Content-Disposition"]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("draft", [True, False])
+def test_no_download_without_a_saved_grouping(user_client, db, draft):
+    if draft:
+        GroupingRule.objects.create(path="sales.csv")
+
+    assert download(user_client).status_code == 404
+
+
+@pytest.mark.django_db
+def test_no_download_before_airflow_or_after_a_failure(user_client, db):
+    rule = configured()
+    assert download(user_client).status_code == 404
+
+    mark_failed(db, "sales.csv", 1, "category", [], "No column 'price'", 1, rule.pk)
+    assert download(user_client).status_code == 404
+
+
+@pytest.mark.django_db
+def test_download_while_airflow_writes_asks_to_retry(user_client, db, monkeypatch):
+    configured()
+    monkeypatch.setattr(
+        "files.views.read_result", lambda rule, everything: results.Result("busy")
+    )
+
+    response = download(user_client)
+
+    assert response.status_code == 503
+    assert response.headers["Retry-After"] == "5"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("path", ["", "notes.txt", "missing.csv", "../sales.csv"])
+def test_download_only_for_existing_table_files(user_client, db, path):
+    assert download(user_client, path).status_code in (400, 404)
+
+
+@pytest.mark.django_db
+def test_download_needs_sign_in(client, file_root, db):
+    response = download(client)
+
+    assert response.status_code == 302
+    assert response.url.startswith(reverse("login"))
+
+
+@pytest.mark.django_db
+def test_no_download_without_the_pipeline(user_client, db, settings):
+    settings.DUCKDB_PATH = ""
+
+    assert download(user_client).status_code == 404

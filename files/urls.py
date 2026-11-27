@@ -14,6 +14,11 @@ urlpatterns = [
     path("grouping/", views.GroupingView.as_view(), name="grouping"),
     path("results/", views.ResultsView.as_view(), name="results"),
     path(
+        "results/download/",
+        views.ResultsDownloadView.as_view(),
+        name="results_download",
+    ),
+    path(
         "api/grouping-rules/",
         views.GroupingRulesView.as_view(),
         name="grouping_rules",
